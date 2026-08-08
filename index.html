@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Convert a single-page PDF schematic into ROS-compatible grayscale PGM and YAML map files."
+    />
+    <title>ROS Map Generator</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to map generator</a>
+
+    <header class="site-header">
+      <div class="site-header__content">
+        <a class="brand" href="./" aria-label="ROS Map Generator home">
+          <span class="brand__mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" focusable="false">
+              <path d="M4 5.5h16v13H4z" />
+              <path d="M8 5.5v13M16 5.5v13M4 10h16M4 14h16" />
+            </svg>
+          </span>
+          <span>ROS Map Generator</span>
+        </a>
+        <span class="version-badge">Simple converter</span>
+      </div>
+    </header>
+
+    <main id="main-content" class="page-shell">
+      <section class="intro" aria-labelledby="page-title">
+        <p class="eyebrow">PDF to ROS map</p>
+        <h1 id="page-title">Turn a schematic into a grayscale map</h1>
+        <p class="intro__summary">
+          Upload a single-page PDF, review the full-sheet preview, and download a
+          PGM image with its matching ROS YAML file.
+        </p>
+      </section>
+
+      <aside class="scope-note" aria-labelledby="scope-title">
+        <span class="scope-note__icon" aria-hidden="true">i</span>
+        <div>
+          <h2 id="scope-title">Full-sheet conversion</h2>
+          <p>
+            This first version renders the complete single-page PDF at a fixed
+            <strong>150 DPI</strong> and converts it as-is. Grid lines, labels,
+            borders, title blocks, and other drawing details are not removed.
+          </p>
+        </div>
+      </aside>
+
+      <div class="workspace">
+        <section class="panel controls-panel" aria-labelledby="converter-title">
+          <div class="panel__header">
+            <div>
+              <p class="section-kicker">Map settings</p>
+              <h2 id="converter-title">Create your files</h2>
+            </div>
+          </div>
+
+          <form id="converter-form" novalidate>
+            <fieldset class="form-section">
+              <legend>
+                <span class="step-number" aria-hidden="true">1</span>
+                Select a schematic
+              </legend>
+
+              <label class="file-picker" for="pdf-input">
+                <span class="file-picker__icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" focusable="false">
+                    <path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5" />
+                    <path d="M5 14.5V19h14v-4.5" />
+                  </svg>
+                </span>
+                <span class="file-picker__text">
+                  <span class="file-picker__title">Choose a PDF file</span>
+                  <span class="file-picker__hint">Single-page PDF only</span>
+                </span>
+                <span class="button button--secondary" aria-hidden="true">Browse</span>
+                <input
+                  id="pdf-input"
+                  name="pdf"
+                  type="file"
+                  accept="application/pdf,.pdf"
+                  aria-describedby="file-help file-details"
+                />
+              </label>
+              <p id="file-help" class="visually-hidden">
+                Choose one single-page PDF schematic to convert.
+              </p>
+              <p id="file-details" class="file-details" aria-live="polite">
+                No PDF selected
+              </p>
+            </fieldset>
+
+            <fieldset class="form-section form-section--settings">
+              <legend>
+                <span class="step-number" aria-hidden="true">2</span>
+                Configure the map
+              </legend>
+
+              <div class="field">
+                <label for="base-filename">File name</label>
+                <div class="input-with-suffix">
+                  <input
+                    id="base-filename"
+                    name="base-filename"
+                    type="text"
+                    value="map"
+                    autocomplete="off"
+                    spellcheck="false"
+                    required
+                    aria-describedby="filename-help"
+                  />
+                  <span aria-hidden="true">.pgm / .yaml</span>
+                </div>
+                <p id="filename-help" class="field-help">
+                  Both downloads will use this name.
+                </p>
+              </div>
+
+              <div class="settings-grid">
+                <div class="field">
+                  <label for="resolution">Resolution</label>
+                  <div class="input-with-suffix input-with-suffix--compact">
+                    <input
+                      id="resolution"
+                      name="resolution"
+                      type="number"
+                      value="0.05"
+                      min="0.0001"
+                      step="any"
+                      inputmode="decimal"
+                      required
+                      aria-describedby="resolution-help"
+                    />
+                    <span aria-hidden="true">m/px</span>
+                  </div>
+                  <p id="resolution-help" class="field-help">
+                    Map scale in metres per pixel.
+                  </p>
+                </div>
+
+                <div class="field">
+                  <label for="origin-x">Origin X</label>
+                  <div class="input-with-suffix input-with-suffix--compact">
+                    <input
+                      id="origin-x"
+                      name="origin-x"
+                      type="number"
+                      value="0.0"
+                      step="0.1"
+                      inputmode="decimal"
+                      required
+                    />
+                    <span aria-hidden="true">m</span>
+                  </div>
+                </div>
+
+                <div class="field">
+                  <label for="origin-y">Origin Y</label>
+                  <div class="input-with-suffix input-with-suffix--compact">
+                    <input
+                      id="origin-y"
+                      name="origin-y"
+                      type="number"
+                      value="0.0"
+                      step="0.1"
+                      inputmode="decimal"
+                      required
+                    />
+                    <span aria-hidden="true">m</span>
+                  </div>
+                </div>
+              </div>
+            </fieldset>
+
+            <div class="generate-area">
+              <button id="generate-button" class="button button--primary" type="submit" disabled>
+                Generate map files
+              </button>
+              <p id="status-message" class="status-message" role="status" aria-live="polite">
+                Select a PDF to begin.
+              </p>
+            </div>
+          </form>
+
+          <section class="downloads" aria-labelledby="downloads-title">
+            <div>
+              <h3 id="downloads-title">Downloads</h3>
+              <p>Your generated files will appear here.</p>
+            </div>
+            <div class="download-actions">
+              <a
+                id="download-pgm"
+                class="button button--download is-disabled"
+                aria-disabled="true"
+                tabindex="-1"
+              >
+                <span>Download PGM</span>
+                <span class="button__extension" aria-hidden="true">.pgm</span>
+              </a>
+              <a
+                id="download-yaml"
+                class="button button--download is-disabled"
+                aria-disabled="true"
+                tabindex="-1"
+              >
+                <span>Download YAML</span>
+                <span class="button__extension" aria-hidden="true">.yaml</span>
+              </a>
+            </div>
+          </section>
+        </section>
+
+        <section class="panel preview-panel" aria-labelledby="preview-title">
+          <div class="panel__header panel__header--preview">
+            <div>
+              <p class="section-kicker">Full sheet</p>
+              <h2 id="preview-title">Grayscale preview</h2>
+            </div>
+            <span class="dpi-badge">150 DPI</span>
+          </div>
+
+          <figure class="preview-figure">
+            <div class="preview-surface">
+              <div id="preview-placeholder" class="preview-placeholder">
+                <span class="preview-placeholder__icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" focusable="false">
+                    <path d="M6 2.75h8l4 4V21.25H6z" />
+                    <path d="M14 2.75v4h4M9 12h6M9 15.5h6" />
+                  </svg>
+                </span>
+                <p>Upload a PDF to see its grayscale preview.</p>
+              </div>
+              <canvas
+                id="preview-canvas"
+                aria-label="Grayscale preview of the uploaded PDF schematic"
+                hidden
+              ></canvas>
+            </div>
+            <figcaption>
+              The preview represents the complete source sheet. Nothing is cropped
+              or cleaned up in this version.
+            </figcaption>
+          </figure>
+
+          <div id="output-details" class="output-details" aria-live="polite">
+            <span>Output details</span>
+            <p>Dimensions and file information will appear after generation.</p>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <footer class="site-footer">
+      <p>Files are processed locally in your browser.</p>
+    </footer>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
