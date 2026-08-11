@@ -72,6 +72,21 @@ describe('SFU v1 layer profile', () => {
     ).toMatchObject({ role: 'stair', action: 'review', visible: true })
   })
 
+  it('keeps the exact GROS building-envelope layer as known content', () => {
+    expect(
+      classifySfuLayer('FP002_3 Data|GROS', { profileRecognized: true }),
+    ).toMatchObject({
+      suffix: 'GROS',
+      role: 'building-envelope',
+      action: 'keep',
+      visible: true,
+      known: true,
+    })
+    expect(
+      classifySfuLayer('FP002_3 Data|GROSS', { profileRecognized: true }),
+    ).toMatchObject({ role: 'unknown', known: false })
+  })
+
   it('preserves unknown layers at their default visibility', () => {
     expect(
       classifySfuLayer('BUILDING|FUTURE-LAYER', { profileRecognized: true }),

@@ -25,8 +25,9 @@ When a supported SFU key-plan PDF is selected, the application:
 - Crop: derives building bounds from structural AutoCAD layers and adds a
   one-metre margin before the calibrated final render
 - Occupancy: ranks enclosed circulation regions by the number of closed doors
-  along their boundary; a separately gated courtyard-ring profile handles plans
-  whose hallway surrounds a large atrium
+  along their boundary; on AQ-style plans, the verified `GROS` building envelope
+  fences off the exterior so the full connected circulation around the courtyard
+  can remain free instead of being reduced to a fixed-width ring
 - Trace cleanup: absorbs pale drafting overlays up to `0.15 m` wide only when
   verified free hallway exists on opposite sides; walls and excluded rooms are
   never expanded
@@ -51,6 +52,11 @@ fails closed: if no supported circulation pattern passes the confidence gates,
 the app leaves space excluded and reports why rather than making it white/free.
 The trace cleanup is deliberately local and runs only after hallway selection,
 so faint overlays cannot change which hallway component was chosen.
+The AQ envelope path is also gated: it is used only when one exact, visible
+`GROS` layer and the expected dominant courtyard geometry are present. Its
+diagnostics report whether the envelope was supplied and accepted, keeping a
+missing or ambiguous envelope from silently expanding free space into the page
+background.
 
 This is an automatic occupancy-map draft, not yet a robot-validated map.
 Exterior and unselected rooms are blocked, but stairs, fixtures, special doors,

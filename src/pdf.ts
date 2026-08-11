@@ -154,6 +154,7 @@ const CROP_SEED_SUFFIXES = new Set([
 ])
 
 const AUTO_CROP_PADDING_METRES = 1
+const BUILDING_ENVELOPE_LAYER_SUFFIX = 'GROS'
 
 // The inspected SFU corpus also contains real swing doors on glazing and
 // floor/wood-detail layers. Those layers carry other useful geometry, so they
@@ -381,6 +382,23 @@ async function finalConfig(
     if (action === 'remove' || hiddenLayerIds.has(id)) {
       config.setVisibility(id, false, false)
     }
+  }
+  return config
+}
+
+async function isolatedLayerConfig(
+  pdf: PDFDocumentProxy,
+  layers: readonly PdfLayerInspection[],
+  visibleLayerId: string,
+): Promise<OptionalContentConfigLike> {
+  const config = await getOptionalContentConfig(pdf)
+  const knownLayerIds = new Set(layers.map((layer) => layer.id))
+  for (const [id] of config) {
+    config.setVisibility(
+      id,
+      knownLayerIds.has(id) && id === visibleLayerId,
+      false,
+    )
   }
   return config
 }
@@ -985,6 +1003,34 @@ export async function renderSinglePagePdf(
     let occupancy: OccupancyClassification | null = null
     if (profileRecognized) {
       const occupancySource = readCanvas(canvas)
+      const envelopeLayers = layers.filter(
+        (layer) =>
+          layer.initiallyVisible &&
+          layer.suffix === BUILDING_ENVELOPE_LAYER_SUFFIX,
+      )
+      let envelopeCanvas: HTMLCanvasElement | null = null
+      let buildingEnvelopeSource: ImageData | undefined
+      try {
+        if (envelopeLayers.length === 1) {
+          envelopeCanvas = await renderCanvas(
+            pdfjs,
+            page,
+            fullViewport,
+            await isolatedLayerConfig(pdf, layers, envelopeLayers[0].id),
+            outputSize.width,
+            outputSize.height,
+            cropBounds
+              ? [1, 0, 0, 1, -cropBounds.left, -cropBounds.top]
+              : undefined,
+          )
+          buildingEnvelopeSource = readCanvas(envelopeCanvas)
+        }
+      } finally {
+        if (envelopeCanvas) {
+          envelopeCanvas.width = 0
+          envelopeCanvas.height = 0
+        }
+      }
       occupancy = classifyMainHallways(occupancySource, {
         resolution,
         doorSegments: pixelDoorSegments(
@@ -992,6 +1038,7 @@ export async function renderSinglePagePdf(
           fullViewport,
           cropBounds,
         ),
+        buildingEnvelopeSource,
       })
       paintOccupancyCanvas(canvas, occupancySource, occupancy)
       if (!occupancy.diagnostics.applied && occupancy.diagnostics.reason) {

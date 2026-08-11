@@ -6,6 +6,7 @@ export type SfuLayerRole =
   | 'title'
   | 'north-indicator'
   | 'sheet-border'
+  | 'building-envelope'
   | 'wall'
   | 'door'
   | 'stair'
@@ -41,6 +42,7 @@ const SUFFIX_RULES = Object.freeze({
   'RM$TXT': { role: 'room-text', action: 'remove' },
   ASHTT: { role: 'title', action: 'remove' },
   'BBY-SFU-NORTH': { role: 'north-indicator', action: 'remove' },
+  GROS: { role: 'building-envelope', action: 'keep' },
   AWA: { role: 'wall', action: 'keep' },
   ADO: { role: 'door', action: 'replace' },
   AFLST: { role: 'stair', action: 'review' },

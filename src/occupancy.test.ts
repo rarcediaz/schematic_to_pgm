@@ -312,6 +312,67 @@ describe('main-hallway trinary classification', () => {
     expect(pixelAt(result, 0, 0)).toBe(OCCUPANCY_PALETTE.excluded)
   })
 
+  it('uses an aligned envelope to recover the broad concourse around a courtyard', () => {
+    const source = image(80, 80)
+    paintRectangle(source, 18, 18, 61, 61)
+
+    const envelope = image(80, 80)
+    paintRectangle(envelope, 5, 5, 74, 74)
+    paintRectangle(envelope, 18, 18, 61, 61)
+
+    const result = classifyMainHallways(source, {
+      resolution: 1,
+      doorSegments: [],
+      buildingEnvelopeSource: envelope,
+      sealRadiusMetres: 0,
+    })
+
+    expect(result.diagnostics).toMatchObject({
+      applied: true,
+      selectionMode: 'courtyard-envelope',
+      envelopeSupplied: true,
+      envelopeApplied: true,
+    })
+    expect(result.diagnostics.envelopeFootprintPixelCount).toBeGreaterThan(0)
+    expect(result.diagnostics.envelopeNestedVoidPixelCount).toBeGreaterThan(0)
+    expect(result.diagnostics.envelopeExpandedPixelCount).toBeGreaterThan(0)
+    // This point is farther than the three-metre annulus but inside the outer
+    // building outline, so only the validated-envelope expansion recovers it.
+    expect(pixelAt(result, 10, 40)).toBe(OCCUPANCY_PALETTE.free)
+    expect(pixelAt(result, 40, 40)).toBe(OCCUPANCY_PALETTE.excluded)
+    expect(pixelAt(result, 2, 40)).toBe(OCCUPANCY_PALETTE.excluded)
+    for (let y = 0; y < result.height; y += 1) {
+      for (let x = 0; x < result.width; x += 1) {
+        const outsideEnvelope = x < 5 || x > 74 || y < 5 || y > 74
+        if (outsideEnvelope) {
+          expect(pixelAt(result, x, y)).not.toBe(OCCUPANCY_PALETTE.free)
+        }
+      }
+    }
+  })
+
+  it('falls back to the safe annulus when the supplied envelope is incomplete', () => {
+    const source = image(80, 80)
+    paintRectangle(source, 18, 18, 61, 61)
+    const incompleteEnvelope = image(80, 80)
+    paintRectangle(incompleteEnvelope, 18, 18, 61, 61)
+
+    const result = classifyMainHallways(source, {
+      resolution: 1,
+      doorSegments: [],
+      buildingEnvelopeSource: incompleteEnvelope,
+      sealRadiusMetres: 0,
+    })
+
+    expect(result.diagnostics.selectionMode).toBe('courtyard-annulus')
+    expect(result.diagnostics.envelopeSupplied).toBe(true)
+    expect(result.diagnostics.envelopeApplied).toBe(false)
+    expect(result.diagnostics.envelopeReason).toMatch(/outer outline|area|inside/)
+    expect(pixelAt(result, 17, 40)).toBe(OCCUPANCY_PALETTE.free)
+    expect(pixelAt(result, 10, 40)).toBe(OCCUPANCY_PALETTE.excluded)
+    expect(pixelAt(result, 40, 40)).toBe(OCCUPANCY_PALETTE.excluded)
+  })
+
   it('does not trigger courtyard mode for a large room with doors or tied large voids', () => {
     const roomSource = image(40, 40)
     paintRectangle(roomSource, 8, 8, 31, 31)
@@ -361,6 +422,13 @@ describe('occupancy input validation', () => {
         doorSegments: [],
       }),
     ).toThrow(/resolution/)
+    expect(() =>
+      classifyMainHallways(image(4, 4), {
+        resolution: 0.1,
+        doorSegments: [],
+        buildingEnvelopeSource: image(3, 4),
+      }),
+    ).toThrow(/same width and height/)
   })
 
   it('rejects invalid thresholds and door geometry', () => {

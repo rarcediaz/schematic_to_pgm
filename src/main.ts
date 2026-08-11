@@ -162,6 +162,11 @@ function hallwayResultDescription(
   if (!diagnostics.applied) {
     return 'hallway classification withheld; export unavailable'
   }
+  if (diagnostics.selectionMode === 'courtyard-envelope') {
+    return detailed
+      ? 'full courtyard circulation kept white inside the verified building envelope; rooms, courtyard, and background blocked in gray'
+      : 'full envelope-bounded circulation white · rooms/courtyard/background blocked gray'
+  }
   if (diagnostics.selectionMode === 'courtyard-annulus') {
     return detailed
       ? 'courtyard-ring hallway kept white; rooms, courtyard, and background blocked in gray'

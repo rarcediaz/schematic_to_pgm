@@ -245,8 +245,12 @@ Status: **in progress**
       a white PDF page must not become navigable free space.
 - [x] Classify hallway-adjacent barriers as occupied, high-confidence main
       circulation as free, and rooms, exterior, or uncertain regions as excluded.
-      Use closed-door incidence for the standard plan shape and a separately
-      gated courtyard-annulus mode for AQ-style plans.
+      Use closed-door incidence for the standard plan shape. For AQ-style plans,
+      use the exact visible `GROS` footprint as a verified building envelope and
+      expand the full connected courtyard circulation within it rather than
+      keeping only a fixed-width annulus.
+- [x] Report whether the AQ building envelope was supplied and accepted, and
+      expose the envelope-bounded selection mode in the processing diagnostics.
 - [x] Use an explicit three-value preview and PGM palette compatible with YAML
       thresholds. Dark gray 80 remains visually distinct from black walls while
       loading as occupied with the current `occupied_thresh: 0.65`.

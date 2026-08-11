@@ -20,6 +20,12 @@ export interface OccupancyClassificationOptions {
   /** Physical output resolution in metres per pixel. */
   readonly resolution: number
   readonly doorSegments: readonly PixelDoorSegment[]
+  /**
+   * Optional aligned render containing only the building-envelope layer.
+   * A validated envelope can separate a clipped outer concourse from the
+   * page background on courtyard plans.
+   */
+  readonly buildingEnvelopeSource?: RgbaPixelBuffer
   /** Pixels at or below this visible luminance seed the sealed obstacle mask. */
   readonly strongDarkLuminanceMax?: number
   /** Pixels at or above this visible luminance participate in open components. */
@@ -68,6 +74,7 @@ export type OccupancySelectionMode =
   | 'none'
   | 'components'
   | 'courtyard-annulus'
+  | 'courtyard-envelope'
 
 export interface OccupancyDiagnostics {
   readonly applied: boolean
@@ -86,6 +93,12 @@ export interface OccupancyDiagnostics {
   readonly courtyardImageFraction: number
   readonly courtyardBoundingBoxFillRatio: number
   readonly courtyardAnnulusPixelCount: number
+  readonly envelopeSupplied: boolean
+  readonly envelopeApplied: boolean
+  readonly envelopeReason: string | null
+  readonly envelopeFootprintPixelCount: number
+  readonly envelopeNestedVoidPixelCount: number
+  readonly envelopeExpandedPixelCount: number
   readonly sealedObstaclePixelCount: number
   readonly occupiedPixelCount: number
   readonly excludedPixelCount: number
@@ -667,6 +680,242 @@ function componentAspectRatio(component: Component): number {
   return Math.max(width, height) / Math.max(1, Math.min(width, height))
 }
 
+interface BuildingEnvelopeAnalysis {
+  readonly accepted: boolean
+  readonly reason: string | null
+  readonly footprint: Uint8Array | null
+  readonly footprintPixelCount: number
+  readonly nestedVoidPixelCount: number
+}
+
+function rejectedBuildingEnvelope(
+  reason: string,
+  nestedVoidPixelCount = 0,
+): BuildingEnvelopeAnalysis {
+  return {
+    accepted: false,
+    reason,
+    footprint: null,
+    footprintPixelCount: 0,
+    nestedVoidPixelCount,
+  }
+}
+
+/**
+ * Turns a sparse, isolated envelope render into an outer-minus-inner mask.
+ *
+ * SFU's GROS outline can be clipped at the top of the retained crop, so a
+ * normal exterior flood fill is not sufficient. Its outer outline is still
+ * present on almost every scanline, however: filling between the first and
+ * last envelope pixels reconstructs the footprint without inventing a convex
+ * hull. The result is accepted only when a dominant compact enclosed void
+ * agrees with the courtyard already found in the full drawing.
+ */
+function analyzeBuildingEnvelope(
+  source: RgbaPixelBuffer,
+  classifiedState: Uint8Array,
+  width: number,
+  height: number,
+  courtyard: Component,
+  options: ResolvedOptions,
+): BuildingEnvelopeAnalysis {
+  const pixelCount = width * height
+  const envelopeInk = new Uint8Array(pixelCount)
+  const envelopeOpenState = new Uint8Array(pixelCount)
+  for (let index = 0; index < pixelCount; index += 1) {
+    if (
+      visibleLuminance(source.data, index * 4) <=
+      options.nearWhiteLuminanceMin
+    ) {
+      envelopeInk[index] = 1
+    } else {
+      envelopeOpenState[index] = 1
+    }
+  }
+
+  const envelopeComponents: Component[] = []
+  for (let seed = 0; seed < pixelCount; seed += 1) {
+    if (envelopeOpenState[seed] !== 1) continue
+    const component: Component = {
+      id: envelopeComponents.length,
+      seed,
+      doorIds: new Set<number>(),
+      pixels: 0,
+      left: width,
+      top: height,
+      right: 0,
+      bottom: 0,
+      touchesEdge: false,
+    }
+    floodScanline(
+      envelopeOpenState,
+      width,
+      height,
+      seed,
+      1,
+      2,
+      (_index, x, y) => {
+        component.pixels += 1
+        component.left = Math.min(component.left, x)
+        component.top = Math.min(component.top, y)
+        component.right = Math.max(component.right, x + 1)
+        component.bottom = Math.max(component.bottom, y + 1)
+        component.touchesEdge ||=
+          x === 0 || y === 0 || x + 1 === width || y + 1 === height
+      },
+    )
+    envelopeComponents.push(component)
+  }
+
+  const nestedCandidates = envelopeComponents
+    .filter(
+      (component) =>
+        !component.touchesEdge &&
+        component.pixels / pixelCount >= options.courtyardMinImageFraction &&
+        componentFillRatio(component) >=
+          options.courtyardMinBoundingBoxFillRatio,
+    )
+    .sort((first, second) => second.pixels - first.pixels)
+  const nestedVoid = nestedCandidates[0] ?? null
+  if (!nestedVoid) {
+    return rejectedBuildingEnvelope(
+      'The envelope layer did not contain a dominant compact courtyard void.',
+    )
+  }
+  const nestedRunnerUp = nestedCandidates[1] ?? null
+  const nestedDominance =
+    nestedVoid.pixels / Math.max(1, nestedRunnerUp?.pixels ?? 0)
+  if (nestedDominance < options.courtyardDominanceRatio) {
+    return rejectedBuildingEnvelope(
+      'The envelope layer contained competing courtyard-sized voids.',
+      nestedVoid.pixels,
+    )
+  }
+
+  // Mark just the selected nested void so it can be compared and subtracted.
+  floodScanline(
+    envelopeOpenState,
+    width,
+    height,
+    nestedVoid.seed,
+    2,
+    3,
+  )
+
+  const footprint = new Uint8Array(pixelCount)
+  const minimumRowSpan = Math.max(3, Math.ceil(width * 0.03))
+  let supportedRows = 0
+  let footprintLeft = width
+  let footprintTop = height
+  let footprintRight = 0
+  let footprintBottom = 0
+  let outerFootprintPixels = 0
+  for (let y = 0; y < height; y += 1) {
+    const row = y * width
+    let left = -1
+    let right = -1
+    for (let x = 0; x < width; x += 1) {
+      if (envelopeInk[row + x] === 0) continue
+      if (left < 0) left = x
+      right = x
+    }
+    if (left < 0 || right - left < minimumRowSpan) continue
+    supportedRows += 1
+    footprint.fill(1, row + left, row + right + 1)
+    outerFootprintPixels += right - left + 1
+    footprintLeft = Math.min(footprintLeft, left)
+    footprintTop = Math.min(footprintTop, y)
+    footprintRight = Math.max(footprintRight, right + 1)
+    footprintBottom = Math.max(footprintBottom, y + 1)
+  }
+
+  if (supportedRows === 0) {
+    return rejectedBuildingEnvelope(
+      'The envelope layer did not contain a scanline-supported outer outline.',
+      nestedVoid.pixels,
+    )
+  }
+  const footprintHeight = footprintBottom - footprintTop
+  if (
+    footprintHeight <= 0 ||
+    supportedRows / footprintHeight < 0.75
+  ) {
+    return rejectedBuildingEnvelope(
+      'The envelope outer outline was too incomplete across the crop.',
+      nestedVoid.pixels,
+    )
+  }
+  if (
+    footprintLeft === 0 ||
+    footprintTop === 0 ||
+    footprintRight === width ||
+    footprintBottom === height
+  ) {
+    return rejectedBuildingEnvelope(
+      'The reconstructed envelope footprint reached the crop edge.',
+      nestedVoid.pixels,
+    )
+  }
+
+  const minimumMargin = Math.max(1, Math.ceil(0.5 / options.resolution))
+  if (
+    nestedVoid.left - footprintLeft < minimumMargin ||
+    nestedVoid.top - footprintTop < minimumMargin ||
+    footprintRight - nestedVoid.right < minimumMargin ||
+    footprintBottom - nestedVoid.bottom < minimumMargin
+  ) {
+    return rejectedBuildingEnvelope(
+      'The envelope did not place the courtyard safely inside an outer outline.',
+      nestedVoid.pixels,
+    )
+  }
+  if (
+    outerFootprintPixels < nestedVoid.pixels * 1.25 ||
+    outerFootprintPixels > pixelCount * 0.98
+  ) {
+    return rejectedBuildingEnvelope(
+      'The reconstructed envelope footprint had an implausible area.',
+      nestedVoid.pixels,
+    )
+  }
+
+  let sourceCourtyardInsideFootprint = 0
+  let courtyardIntersection = 0
+  for (let index = 0; index < pixelCount; index += 1) {
+    if (classifiedState[index] !== 4) continue
+    if (footprint[index] !== 0) sourceCourtyardInsideFootprint += 1
+    if (envelopeOpenState[index] === 3) courtyardIntersection += 1
+  }
+  if (
+    sourceCourtyardInsideFootprint / courtyard.pixels < 0.95 ||
+    courtyardIntersection / courtyard.pixels < 0.9 ||
+    courtyardIntersection / nestedVoid.pixels < 0.85
+  ) {
+    return rejectedBuildingEnvelope(
+      'The envelope courtyard did not align with the detected drawing courtyard.',
+      nestedVoid.pixels,
+    )
+  }
+
+  let footprintPixelCount = 0
+  for (let index = 0; index < pixelCount; index += 1) {
+    if (footprint[index] === 0) continue
+    if (envelopeOpenState[index] === 3) {
+      footprint[index] = 0
+    } else {
+      footprintPixelCount += 1
+    }
+  }
+
+  return {
+    accepted: true,
+    reason: null,
+    footprint,
+    footprintPixelCount,
+    nestedVoidPixelCount: nestedVoid.pixels,
+  }
+}
+
 function createCourtyardProximityMask(
   state: Uint8Array,
   width: number,
@@ -717,6 +966,7 @@ function createCourtyardProximityMask(
 
 interface ProximityStats {
   pixels: number
+  footprintPixels: number
   left: number
   top: number
   right: number
@@ -729,15 +979,20 @@ function inspectComponentProximity(
   width: number,
   height: number,
   component: Component,
+  footprint?: Uint8Array,
 ): ProximityStats {
   const stats: ProximityStats = {
     pixels: 0,
+    footprintPixels: 0,
     left: width,
     top: height,
     right: 0,
     bottom: 0,
   }
   floodScanline(state, width, height, component.seed, 2, 5, (index, x, y) => {
+    if (footprint !== undefined && footprint[index] !== 0) {
+      stats.footprintPixels += 1
+    }
     if (proximity[index] === 0) return
     stats.pixels += 1
     stats.left = Math.min(stats.left, x)
@@ -866,6 +1121,18 @@ export function classifyMainHallways(
   const pixelCount = validateImage(image)
   const options = resolveOptions(rawOptions)
   const { width, height } = image
+  const buildingEnvelopeSource = rawOptions.buildingEnvelopeSource
+  if (buildingEnvelopeSource) {
+    validateImage(buildingEnvelopeSource)
+    if (
+      buildingEnvelopeSource.width !== width ||
+      buildingEnvelopeSource.height !== height
+    ) {
+      throw new RangeError(
+        'buildingEnvelopeSource must have the same width and height as image.',
+      )
+    }
+  }
   const obstacles = createSealedObstacleMask(image, options)
   const state = createOpenState(
     image,
@@ -1012,9 +1279,22 @@ export function classifyMainHallways(
     (component) => component.doorIds.size >= incidenceCutoff,
   )
   const unsafeDominant = dominantHighDoorComponent?.touchesEdge === true
+  const geometricallyEligibleIds = new Set(
+    geometricallyEligible.map((component) => component.id),
+  )
   let selectedComponentCount = 0
   let candidateComponentCount = candidates.length
   let courtyardAnnulusPixelCount = 0
+  let envelopeExpandedPixelCount = 0
+  let envelopeAnalysis: BuildingEnvelopeAnalysis = {
+    accepted: false,
+    reason: buildingEnvelopeSource
+      ? 'The envelope source was not used because courtyard mode was not detected.'
+      : null,
+    footprint: null,
+    footprintPixelCount: 0,
+    nestedVoidPixelCount: 0,
+  }
 
   if (courtyardDetected && courtyard) {
     const proximity = createCourtyardProximityMask(
@@ -1024,6 +1304,16 @@ export function classifyMainHallways(
       courtyard,
       options.courtyardProximityPixels,
     )
+    if (buildingEnvelopeSource) {
+      envelopeAnalysis = analyzeBuildingEnvelope(
+        buildingEnvelopeSource,
+        state,
+        width,
+        height,
+        courtyard,
+        options,
+      )
+    }
     candidateComponentCount = 0
 
     for (const component of components) {
@@ -1034,6 +1324,7 @@ export function classifyMainHallways(
         width,
         height,
         component,
+        envelopeAnalysis.footprint ?? undefined,
       )
       const componentArea =
         component.pixels * options.resolution * options.resolution
@@ -1041,12 +1332,20 @@ export function classifyMainHallways(
         componentAspectRatio(component) >= options.annulusMinAspectRatio ||
         componentFillRatio(component) <=
           options.annulusMaxBoundingBoxFillRatio
-      const selectWholeComponent =
+      const selectWholeAnnulusComponent =
         !component.touchesEdge &&
         componentArea >= options.annulusMinAreaMetresSquared &&
         proximityStats.pixels / component.pixels >=
           options.annulusMinProximityFraction &&
         componentHasCorridorShape
+      const selectWholeEnvelopeComponent =
+        envelopeAnalysis.accepted &&
+        !component.touchesEdge &&
+        geometricallyEligibleIds.has(component.id) &&
+        component.doorIds.size >= options.minDoorIncidence &&
+        proximityStats.footprintPixels / component.pixels >= 0.95
+      const selectWholeComponent =
+        selectWholeAnnulusComponent || selectWholeEnvelopeComponent
       const proximityArea =
         proximityStats.pixels * options.resolution * options.resolution
       const selectBoundedEdgeSubset =
@@ -1057,21 +1356,43 @@ export function classifyMainHallways(
       if (selectWholeComponent) {
         candidateComponentCount += 1
         selectedComponentCount += 1
-        courtyardAnnulusPixelCount += floodScanline(
-          state,
-          width,
-          height,
-          component.seed,
-          5,
-          3,
-        )
+        if (selectWholeAnnulusComponent) {
+          courtyardAnnulusPixelCount += floodScanline(
+            state,
+            width,
+            height,
+            component.seed,
+            5,
+            3,
+          )
+        } else {
+          floodScanline(state, width, height, component.seed, 5, 2, (index) => {
+            if (
+              envelopeAnalysis.footprint === null ||
+              envelopeAnalysis.footprint[index] === 0
+            ) {
+              return
+            }
+            state[index] = 3
+            envelopeExpandedPixelCount += 1
+          })
+        }
       } else if (selectBoundedEdgeSubset) {
         candidateComponentCount += 1
         selectedComponentCount += 1
         floodScanline(state, width, height, component.seed, 5, 2, (index) => {
-          if (proximity[index] === 0) return
+          const insideAnnulus = proximity[index] !== 0
+          const insideEnvelope =
+            envelopeAnalysis.accepted &&
+            envelopeAnalysis.footprint !== null &&
+            envelopeAnalysis.footprint[index] !== 0
+          if (!insideAnnulus && !insideEnvelope) return
           state[index] = 3
-          courtyardAnnulusPixelCount += 1
+          if (insideAnnulus) {
+            courtyardAnnulusPixelCount += 1
+          } else {
+            envelopeExpandedPixelCount += 1
+          }
         })
       } else {
         floodScanline(state, width, height, component.seed, 5, 2)
@@ -1096,6 +1417,17 @@ export function classifyMainHallways(
     options.softTraceMaxWidthPixels,
     options.softTraceLuminanceMin,
   )
+
+  // The validated footprint is also a hard safety boundary. This final clip
+  // covers whole annulus components and soft-trace promotion as well as the
+  // explicit envelope expansion paths above.
+  if (envelopeAnalysis.accepted && envelopeAnalysis.footprint) {
+    for (let index = 0; index < state.length; index += 1) {
+      if (state[index] === 3 && envelopeAnalysis.footprint[index] === 0) {
+        state[index] = 2
+      }
+    }
+  }
 
   const pixels = new Uint8Array(pixelCount)
   pixels.fill(OCCUPANCY_PALETTE.excluded)
@@ -1125,11 +1457,15 @@ export function classifyMainHallways(
     }
   }
 
+  const envelopeApplied =
+    envelopeAnalysis.accepted && envelopeExpandedPixelCount > 0
   const selectionMode: OccupancySelectionMode =
     freePixelCount === 0
       ? 'none'
       : courtyardDetected
-        ? 'courtyard-annulus'
+        ? envelopeApplied
+          ? 'courtyard-envelope'
+          : 'courtyard-annulus'
         : 'components'
   const applied = freePixelCount > 0
   const reason = applied
@@ -1165,6 +1501,12 @@ export function classifyMainHallways(
       courtyardImageFraction,
       courtyardBoundingBoxFillRatio,
       courtyardAnnulusPixelCount,
+      envelopeSupplied: buildingEnvelopeSource !== undefined,
+      envelopeApplied,
+      envelopeReason: envelopeAnalysis.reason,
+      envelopeFootprintPixelCount: envelopeAnalysis.footprintPixelCount,
+      envelopeNestedVoidPixelCount: envelopeAnalysis.nestedVoidPixelCount,
+      envelopeExpandedPixelCount,
       sealedObstaclePixelCount,
       occupiedPixelCount,
       excludedPixelCount: pixelCount - freePixelCount - occupiedPixelCount,
