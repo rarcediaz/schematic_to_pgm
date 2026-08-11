@@ -659,6 +659,44 @@ fieldset {
   display: none;
 }
 
+.occupancy-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem 1rem;
+  margin: 0.85rem 0 0;
+  padding: 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.35;
+  list-style: none;
+}
+
+.occupancy-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.38rem;
+}
+
+.occupancy-swatch {
+  width: 0.85rem;
+  height: 0.85rem;
+  flex: 0 0 auto;
+  border: 1px solid #7f8992;
+  border-radius: 0.18rem;
+}
+
+.occupancy-swatch--free {
+  background: #ffffff;
+}
+
+.occupancy-swatch--occupied {
+  background: #000000;
+}
+
+.occupancy-swatch--excluded {
+  background: #505050;
+}
+
 .preview-figure figcaption {
   margin-top: 0.75rem;
   color: var(--subtle);

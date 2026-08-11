@@ -1,9 +1,9 @@
 # ROS Map Generator roadmap
 
-Last updated: 2026-08-08
+Last updated: 2026-08-10
 
-This document tracks the path from the current full-sheet PDF converter to an
-SFU-specific, navigation-ready ROS map generator. The work remains deliberately
+This document tracks the path from the current calibrated SFU cleanup pipeline
+to a navigation-ready ROS map generator. The work remains deliberately
 incremental: every milestone must preserve a usable raw-conversion fallback.
 
 ## Product scope
@@ -32,15 +32,25 @@ small synthetic PDFs, and approved derived test regions.
 
 - [x] Opens one single-page PDF in the browser.
 - [x] Validates file type, size, page count, password protection, and render size.
-- [x] Renders the complete sheet at a fixed 150 DPI.
-- [x] Shows a full-sheet grayscale preview.
+- [x] Detects `1:250` and `1:400` title-block scales from vector PDF text.
+- [x] Derives render DPI from detected scale and requested ROS resolution.
+- [x] Inventories and normalizes AutoCAD optional-content layers.
+- [x] Removes verified grid, room-text, title, border, and north-indicator layers.
+- [x] Detects structural plan bounds at inspection resolution and renders a
+      calibrated crop with a one-metre margin.
+- [x] Replaces confident `ADO` and vetted glazing/detail swing-door pairs with
+      closed barriers. If no `ADO` pair is confident, that layer is retained
+      and warned.
+- [x] Preserves unknown and stair layers for later processing.
+- [x] Shows the exact trinary hallway occupancy preview used for export.
 - [x] Exports an exact binary P5 PGM and companion ROS YAML.
 - [x] Runs without a backend and keeps the source PDF on the user's computer.
 - [x] Has unit tests, a production build, and Windows/Ubuntu CI configuration.
-- [ ] Has a real Git repository and GitHub remote.
 
-The current YAML resolution is metadata only. It does not yet resize the image
-to match the PDF's printed scale, so current output is not navigation-ready.
+The current PGM and YAML agree on physical pixel resolution and trinary palette,
+but the output is not yet navigation-ready because stairs and special symbols
+still need semantic handling and ROS/Nav2 golden-map validation remains
+unfinished.
 
 ## Evidence from the initial SFU sample set
 
@@ -75,37 +85,37 @@ treated as permanently fixed.
 ```text
 Validate PDF
   -> inspect title text, scale, page geometry, and layers
-  -> ask the user to confirm detected scale
+  -> automatically accept a unique supported scale
   -> render separate semantic layer masks
   -> remove grids and non-map text
-  -> handle doors, stairs, arrows, border, and exterior
-  -> classify occupied / free / unknown space
-  -> show source, cleanup masks, and final occupancy preview
-  -> require confirmation
+  -> close recognized swing doors and handle stairs, arrows, border, and exterior
+  -> classify physical barriers / free hallways / excluded space
+  -> show the final map and optional cleanup details
+  -> request input only for ambiguous or unsupported sheets
   -> export calibrated PGM + YAML
 ```
 
-## Milestone 0 — Preserve the working baseline
+## Milestone 0 — Preserve baseline diagnostics
 
-Status: **complete**
+Status: **in progress**
 
-Keep the existing fixed-150-DPI, full-sheet converter available while the SFU
-pipeline is developed. It is both a useful fallback and a reference for checking
-whether cleanup removed unintended content.
+Keep a raw full-sheet diagnostic render available while the SFU pipeline is
+developed. It is a useful reference for checking whether cleanup removed
+unintended content; it must not be presented as navigation-ready output.
 
 Acceptance gate:
 
-- Existing 12 unit tests and the production build continue to pass.
-- A new cleanup feature cannot replace or silently alter the raw preview.
+- The unit tests and production build continue to pass.
+- An optional raw preview remains available for cleanup diagnostics.
 
 ## Milestone 1 — SFU inspector and support profile
 
-Status: **next**
+Status: **in progress**
 
-- [ ] Refactor PDF handling into separate inspect, render-plan, and render stages.
-- [ ] Read page size, rotation, metadata, title-block text, and optional layers.
-- [ ] Normalize layer names by their suffix after `|`.
-- [ ] Add a versioned SFU layer-role registry: keep, grid, text, door, stair,
+- [x] Refactor PDF handling into separate inspect, mask, crop-plan, and render stages.
+- [x] Read page size, rotation, title-block text, and optional layers.
+- [x] Normalize layer names by their suffix after `|`.
+- [x] Add a versioned SFU layer-role registry: keep, grid, text, door, stair,
       annotation, title, and unknown.
 - [ ] Add an inspector panel or downloadable diagnostic report. No content is
       removed in this milestone.
@@ -122,22 +132,22 @@ Acceptance gate:
 
 ## Milestone 2 — Scale-aware rendering and calibration
 
-Status: **planned**
+Status: **in progress**
 
-- [ ] Extract strict `1:n` scale text before hiding title or dimension layers.
+- [x] Extract strict `1:n` scale text before hiding title or dimension layers.
 - [ ] Show the detected value, source, and confidence, with a manual override.
 - [ ] Treat `1:250` as one unit on paper representing 250 units in the building;
       never display or interpret it as `250:1`.
-- [ ] Derive render DPI from both scale and requested ROS resolution:
+- [x] Derive render DPI from both scale and requested ROS resolution:
 
       `DPI = scale denominator × 0.0254 / metres per pixel`
 
-- [ ] Rerender whenever the requested ROS resolution changes; YAML resolution
+- [x] Rerender whenever the requested ROS resolution changes; YAML resolution
       must not remain metadata-only.
 - [ ] Cross-check calibration against labeled dimensions or grid spacing where
       available. For example, a labeled 6 m span should be 120 pixels at
       `0.05 m/pixel`.
-- [ ] Raise the output limit from 20 million to at least 25 million pixels so a
+- [x] Raise the output limit from 20 million to at least 25 million pixels so a
       full `1:400` SFU sheet works at `0.05 m/pixel`, then measure peak memory with
       the Academic Quadrangle sample on supported Windows and Linux browsers.
       Release intermediate canvases promptly. Add cropping, tiling, or packed
@@ -162,16 +172,19 @@ Acceptance gate:
 
 ## Milestone 3 — Layer-first grid and text cleanup
 
-Status: **planned**
+Status: **in progress**
 
-- [ ] Capture all scale and dimension facts before cleanup.
-- [ ] Render structural and removable layer groups independently.
-- [ ] Remove `SGR`, `SGRID`, and `SGRDI` through PDF layer visibility first.
+- [x] Capture scale facts before cleanup.
+- [x] Render structural and unlayered baseline groups independently.
+- [x] Remove `SGR`, `SGRID`, and `SGRDI` through PDF layer visibility first.
 - [ ] Remove room labels, dimensions, and standard numbers/letters through known
       text layers such as `RM$TXT` and PDF text geometry.
 - [ ] Add conservative visual fallbacks only for content that is not separated
       into layers: repeated light long lines for grids, then glyph geometry/OCR
       for text.
+- [x] Remove thin pale overlay traces inside selected hallway space only when
+      non-structural pixels have verified free space on opposite sides. Do not
+      alter component selection, walls, or excluded rooms.
 - [ ] Show grid and text masks as separate, toggleable overlays.
 
 The implementation will rerender selected PDF layers rather than paint white
@@ -188,15 +201,25 @@ Acceptance gate:
 
 ## Milestone 4 — SFU symbol and sheet cleanup
 
-Status: **planned**
+Status: **in progress**
 
-- [ ] Doors: remove swing arcs and door leaves while preserving the actual wall
-      opening and its width.
+- [x] Doors: match confident vector arc-and-leaf pairs on `ADO`, erase only each
+      matched source path, and draw its leaf as a straight closed barrier across
+      the opening. Unmatched marks stay visible and are reported for review.
+- [x] Handle verified doors authored on `AGL` and `AFLWD` without hiding those
+      mixed-use layers: replace only each matched source arc/open leaf from a
+      layer-hidden background render, enforce a physical door-width gate, then
+      draw its closed barrier.
+- [x] Report the number of generated closures and unmatched `ADO` curves so the
+      processed preview can be checked for missed or unusual symbols.
+- [ ] Add conservative fallbacks for unusual non-hinged and special door types.
+      Unmatched marks currently remain visible and explicitly counted in
+      diagnostics.
 - [ ] Stairs: remove tread/arrow clutter, but never turn the stair footprint into
       free navigable space. Classify it as occupied or unknown after a product
       decision.
-- [ ] Direction arrows and the north indicator: remove from the map image.
-- [ ] Title block, border, legends, and sheet annotations: exclude after their
+- [x] Direction arrows and the north indicator: remove from the map image.
+- [x] Title block and verified sheet borders: exclude after their
       useful metadata has been read.
 - [ ] Add a rule and test cases for elevators, fixtures, furniture, and other
       inaccessible areas before automatically classifying them.
@@ -205,29 +228,37 @@ Status: **planned**
 
 Acceptance gate:
 
-- Door openings remain within one pixel of their pre-cleanup width.
+- Every confidently matched swing door has one closed barrier across its wall
+  opening, with no swing arc left in the output.
+- An `ADO` layer with no confident closure remains unchanged and produces a
+  warning; closure and unmatched-curve counts remain available for review.
 - Stair regions never become free space.
 - Every removed symbol category has its own preview toggle and undo path.
 
 ## Milestone 5 — Plan bounds and trinary occupancy review
 
-Status: **planned**
+Status: **in progress**
 
-- [ ] Detect the floor-plan region and provide manual crop/polygon correction.
-- [ ] Treat page margins and space outside the building as unknown by default;
+- [x] Detect the floor-plan region automatically from structural layer masks.
+- [ ] Provide manual crop/polygon correction for low-confidence cases.
+- [x] Treat page margins and space outside the building as excluded by default;
       a white PDF page must not become navigable free space.
-- [ ] Classify walls as occupied, traversable interior as free, and uncertain or
-      excluded regions as unknown.
-- [ ] Use an explicit three-value preview and PGM palette compatible with YAML
-      thresholds. Mid-gray 127 is a safe initial unknown value; gray 205 would be
-      classified as free with the current `free_thresh: 0.25`.
+- [x] Classify hallway-adjacent barriers as occupied, high-confidence main
+      circulation as free, and rooms, exterior, or uncertain regions as excluded.
+      Use closed-door incidence for the standard plan shape and a separately
+      gated courtyard-annulus mode for AQ-style plans.
+- [x] Use an explicit three-value preview and PGM palette compatible with YAML
+      thresholds. Dark gray 80 remains visually distinct from black walls while
+      loading as occupied with the current `occupied_thresh: 0.65`.
 - [ ] Add synchronized source, cleaned, and occupancy views with zoom/pan,
       before/after comparison, mask toggles, warnings, and physical dimensions.
-- [ ] Disable final export until the user confirms the scale and reviewed map.
+- [x] Withhold automatic free-space classification when no supported pattern
+      passes its confidence gates; report the reason without forcing supported
+      high-confidence sheets through an intermediate confirmation wizard.
 
 Acceptance gate:
 
-- The exported PGM contains only the selected occupied/free/unknown values.
+- The exported PGM contains only the selected wall/excluded/free values.
 - Annotated walls, rooms, and exterior regions have the expected class.
 - Changing resolution invalidates prior output and reprocesses the sheet.
 
@@ -260,19 +291,18 @@ These choices should be made using the reviewed sample corpus, not guessed durin
 the first implementation pass:
 
 1. Should stairs be occupied or unknown in the final map?
-2. Should exterior space be unknown or occupied? The safer initial default is
-   unknown.
-3. Is `0.05 m/pixel` always the target, or may the user choose a coarser value for
+2. Is `0.05 m/pixel` always the target, or may the user choose a coarser value for
    very large sheets?
-4. How should the ROS origin and yaw be selected: fixed convention, automatic
+3. How should the ROS origin and yaw be selected: fixed convention, automatic
    building bounds, or user placement?
-5. Which fixtures, elevators, furniture, and restricted rooms should be treated
+4. Which fixtures, elevators, furniture, and restricted rooms should be treated
    as occupied?
-6. Will the GitHub repository be public or private?
+5. Will the GitHub repository be public or private?
 
 ## Definition of navigation-ready
 
 A sheet is navigation-ready only when the scale was detected and confirmed, all
-cleanup categories were reviewed, structural walls and door openings were
-preserved, stairs and exterior were assigned safe classes, PGM and YAML physical
-extents agree, and the result loads successfully in the target ROS 2/Nav2 setup.
+cleanup categories were reviewed, structural walls were preserved, doors were
+closed or explicitly reviewed, stairs and exterior were assigned safe classes,
+PGM and YAML physical extents agree, and the result loads successfully in the
+target ROS 2/Nav2 setup.

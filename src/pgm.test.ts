@@ -4,6 +4,7 @@ import {
   createPgmHeader,
   grayscaleByte,
   imageDataToPgmBytes,
+  occupancyDataToPgmBytes,
 } from './pgm'
 
 describe('PGM conversion', () => {
@@ -31,5 +32,25 @@ describe('PGM conversion', () => {
     const header = new TextEncoder().encode('P5\n2 1\n255\n')
     expect([...bytes.slice(0, header.length)]).toEqual([...header])
     expect([...bytes.slice(header.length)]).toEqual([255, 0])
+  })
+
+  it('preserves the exact trinary occupancy palette', () => {
+    const bytes = occupancyDataToPgmBytes({
+      width: 3,
+      height: 1,
+      data: new Uint8Array([0, 80, 255]),
+    })
+    const header = new TextEncoder().encode('P5\n3 1\n255\n')
+    expect([...bytes.slice(header.length)]).toEqual([0, 80, 255])
+  })
+
+  it('rejects pixels outside the trinary occupancy palette', () => {
+    expect(() =>
+      occupancyDataToPgmBytes({
+        width: 1,
+        height: 1,
+        data: new Uint8Array([205]),
+      }),
+    ).toThrow(/not a wall, excluded space, or free space/i)
   })
 })

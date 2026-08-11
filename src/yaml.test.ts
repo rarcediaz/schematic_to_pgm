@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import { MAP_DEFAULTS, OCCUPANCY_PALETTE } from './constants'
 import { createMapYaml } from './yaml'
 
 describe('createMapYaml', () => {
@@ -26,6 +27,21 @@ describe('createMapYaml', () => {
     ).toContain('image: SFU9000.pgm\n')
     expect(createMapYaml({ originX: -2, originY: 3.5 })).toContain(
       'origin: [-2.0, 3.5, 0.0]\n',
+    )
+  })
+
+  it('keeps gray excluded space occupied with the emitted thresholds', () => {
+    const occupancy = (gray: number) =>
+      MAP_DEFAULTS.negate === 0 ? (255 - gray) / 255 : gray / 255
+
+    expect(occupancy(OCCUPANCY_PALETTE.occupied)).toBeGreaterThan(
+      MAP_DEFAULTS.occupiedThreshold,
+    )
+    expect(occupancy(OCCUPANCY_PALETTE.free)).toBeLessThan(
+      MAP_DEFAULTS.freeThreshold,
+    )
+    expect(occupancy(OCCUPANCY_PALETTE.excluded)).toBeGreaterThan(
+      MAP_DEFAULTS.occupiedThreshold,
     )
   })
 })

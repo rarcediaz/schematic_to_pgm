@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       name="description"
-      content="Convert a single-page PDF schematic into ROS-compatible grayscale PGM and YAML map files."
+      content="Convert a single-page SFU schematic into a trinary hallway occupancy PGM and matching ROS YAML map."
     />
     <title>ROS Map Generator</title>
     <link rel="stylesheet" href="/src/style.css" />
@@ -31,21 +31,24 @@
     <main id="main-content" class="page-shell">
       <section class="intro" aria-labelledby="page-title">
         <p class="eyebrow">PDF to ROS map</p>
-        <h1 id="page-title">Turn a schematic into a grayscale map</h1>
+        <h1 id="page-title">Turn a schematic into a hallway map</h1>
         <p class="intro__summary">
-          Upload a single-page PDF, review the full-sheet preview, and download a
-          PGM image with its matching ROS YAML file.
+          Upload a single-page SFU schematic, review the automatically cleaned
+          hallway occupancy map, and download a PGM image with its matching ROS
+          YAML file.
         </p>
       </section>
 
       <aside class="scope-note" aria-labelledby="scope-title">
         <span class="scope-note__icon" aria-hidden="true">i</span>
         <div>
-          <h2 id="scope-title">Full-sheet conversion</h2>
+          <h2 id="scope-title">Automatic schematic cleanup</h2>
           <p>
-            This first version renders the complete single-page PDF at a fixed
-            <strong>150 DPI</strong> and converts it as-is. Grid lines, labels,
-            borders, title blocks, and other drawing details are not removed.
+            The app detects the printed scale, removes verified SFU grid, text,
+            title, border, and north-arrow layers, replaces recognized door
+            swings with closed barriers, then finds the main hallway regions.
+            Rooms and page background are blocked in gray; unusual geometry
+            produces a warning instead of being silently marked free.
           </p>
         </div>
       </aside>
@@ -217,10 +220,10 @@
         <section class="panel preview-panel" aria-labelledby="preview-title">
           <div class="panel__header panel__header--preview">
             <div>
-              <p class="section-kicker">Full sheet</p>
-              <h2 id="preview-title">Grayscale preview</h2>
+              <p class="section-kicker">Processed map</p>
+              <h2 id="preview-title">Map preview</h2>
             </div>
-            <span class="dpi-badge">150 DPI</span>
+            <span id="dpi-badge" class="dpi-badge">DPI pending</span>
           </div>
 
           <figure class="preview-figure">
@@ -232,17 +235,24 @@
                     <path d="M14 2.75v4h4M9 12h6M9 15.5h6" />
                   </svg>
                 </span>
-                <p>Upload a PDF to see its grayscale preview.</p>
+                <p>Upload a PDF to see its processed map preview.</p>
               </div>
               <canvas
                 id="preview-canvas"
-                aria-label="Grayscale preview of the uploaded PDF schematic"
+                role="img"
+                aria-label="Trinary hallway occupancy preview of the uploaded PDF schematic"
                 hidden
               ></canvas>
             </div>
-            <figcaption>
-              The preview represents the complete source sheet. Nothing is cropped
-              or cleaned up in this version.
+            <ul id="occupancy-legend" class="occupancy-legend" aria-label="Occupancy map legend">
+              <li><span class="occupancy-swatch occupancy-swatch--free"></span>White: free hallway</li>
+              <li><span class="occupancy-swatch occupancy-swatch--occupied"></span>Black: occupied barrier</li>
+              <li><span class="occupancy-swatch occupancy-swatch--excluded"></span>Gray: blocked room or background</li>
+            </ul>
+            <figcaption id="preview-caption">
+              The preview and PGM use the same trinary pixels. Recognized curved
+              door swings are closed with black barriers; review any warning
+              before export.
             </figcaption>
           </figure>
 

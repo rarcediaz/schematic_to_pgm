@@ -1,10 +1,17 @@
 import {
   MAX_OUTPUT_DIMENSION,
   MAX_OUTPUT_PIXELS,
+  OCCUPANCY_PALETTE,
   PGM_MIME_TYPE,
 } from './constants'
 
 export interface RgbaImageData {
+  readonly width: number
+  readonly height: number
+  readonly data: ArrayLike<number>
+}
+
+export interface TrinaryOccupancyData {
   readonly width: number
   readonly height: number
   readonly data: ArrayLike<number>
@@ -76,6 +83,43 @@ export function imageDataToPgmBytes(image: RgbaImageData): Uint8Array {
 
 export function imageDataToPgmBlob(image: RgbaImageData): Blob {
   const bytes = imageDataToPgmBytes(image)
+  return new Blob([bytes.buffer as ArrayBuffer], { type: PGM_MIME_TYPE })
+}
+
+/** Encodes a validated wall/excluded/free mask as an exact binary P5 PGM. */
+export function occupancyDataToPgmBytes(
+  image: TrinaryOccupancyData,
+): Uint8Array {
+  const { width, height, data } = image
+  assertImageDimensions(width, height)
+  const pixelCount = width * height
+  if (data.length !== pixelCount) {
+    throw new Error('Occupancy data length does not match the image dimensions.')
+  }
+
+  const header = new TextEncoder().encode(createPgmHeader(width, height))
+  const result = new Uint8Array(header.length + pixelCount)
+  result.set(header)
+  for (let pixel = 0; pixel < pixelCount; pixel += 1) {
+    const value = data[pixel]
+    if (
+      value !== OCCUPANCY_PALETTE.occupied &&
+      value !== OCCUPANCY_PALETTE.excluded &&
+      value !== OCCUPANCY_PALETTE.free
+    ) {
+      throw new Error(
+        `Occupancy pixel ${pixel.toLocaleString()} is not a wall, excluded space, or free space.`,
+      )
+    }
+    result[header.length + pixel] = value
+  }
+  return result
+}
+
+export function occupancyDataToPgmBlob(
+  image: TrinaryOccupancyData,
+): Blob {
+  const bytes = occupancyDataToPgmBytes(image)
   return new Blob([bytes.buffer as ArrayBuffer], { type: PGM_MIME_TYPE })
 }
 

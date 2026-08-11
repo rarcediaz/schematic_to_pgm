@@ -1,21 +1,60 @@
 # ROS Map Generator
 
-ROS Map Generator is a deliberately small browser application for turning a single-page SFU building schematic PDF into a grayscale PGM image and a companion ROS map YAML file.
+ROS Map Generator is a browser application for turning a single-page SFU
+building schematic PDF into a cleaned, scale-calibrated trinary PGM image and a
+companion ROS map YAML file. Main hallways remain white while rooms and page
+background become gray and non-traversable.
 
 The staged SFU cleanup and calibration work is tracked in
 [ROADMAP.md](ROADMAP.md).
 
-## MVP scope
+## Current SFU pipeline
 
-The first version renders the complete PDF sheet exactly as shown at a fixed **150 DPI**. Every visible part of the page is preserved, including drawing borders, grid lines, labels, door swings, title blocks, and exterior whitespace.
+When a supported SFU key-plan PDF is selected, the application:
 
 - Input: one single-page SFU schematic PDF
-- Output: a grayscale PGM file and matching YAML metadata
+- Output: a trinary hallway-occupancy PGM file and matching YAML metadata
 - Processing: entirely in the browser; the PDF is not uploaded to a server
-- Cleanup: no cropping, layer filtering, thresholding, or removal of drawing marks
-- Scale: no automatic drawing-scale or real-world distance interpretation
+- Scale: detects supported `1:250` and `1:400` title-block scales and derives
+  render DPI from the requested ROS resolution
+- Cleanup: removes verified grid, room-text, title, sheet-border, and north-arrow
+  PDF layers while preserving unknown and stair layers
+- Doors: replaces confidently matched arc-and-leaf pairs on the SFU `ADO` and
+  vetted glazing/detail layers with straight barriers in the closed-door
+  position; doors are not erased into open passages
+- Crop: derives building bounds from structural AutoCAD layers and adds a
+  one-metre margin before the calibrated final render
+- Occupancy: ranks enclosed circulation regions by the number of closed doors
+  along their boundary; a separately gated courtyard-ring profile handles plans
+  whose hallway surrounds a large atrium
+- Trace cleanup: absorbs pale drafting overlays up to `0.15 m` wide only when
+  verified free hallway exists on opposite sides; walls and excluded rooms are
+  never expanded
+- Palette: writes only black `0` (wall/barrier), dark gray `80` (excluded and
+  occupied), and white `255` (free) pixels to both the preview and PGM
 
-This is a conversion prototype, not yet a navigation-ready map generator. Later versions can add SFU-specific cleanup after the basic rendering and export pipeline is proven.
+Files that do not match the verified SFU page geometry and core layer profile
+are retained only as full-sheet diagnostic previews; map export remains disabled.
+A missing, ambiguous, or unsupported scale stops processing rather than silently
+creating incorrect YAML metadata.
+
+Door replacement uses a conservative gate. If no confident hinged-door pair is
+found, the original `ADO` layer remains visible and processing reports a warning.
+For every supported layer, the app replaces only the confidently matched arc
+and open leaf with pixels from a render where that source layer is hidden, then
+draws the leaf closed. This preserves linework from other layers beneath the
+symbol. Unmatched `ADO` marks remain visible and are reported for review rather
+than silently turning into open passages.
+Unusual non-hinged and special door types may still need a later detector, so
+check the processed preview and its diagnostics. Hallway classification also
+fails closed: if no supported circulation pattern passes the confidence gates,
+the app leaves space excluded and reports why rather than making it white/free.
+The trace cleanup is deliberately local and runs only after hallway selection,
+so faint overlays cannot change which hallway component was chosen.
+
+This is an automatic occupancy-map draft, not yet a robot-validated map.
+Exterior and unselected rooms are blocked, but stairs, fixtures, special doors,
+and other navigation semantics still need category-specific golden-map tests.
 
 ## Prerequisites
 
@@ -63,14 +102,34 @@ Open the local address printed by Vite in a browser. If a Node version manager i
 
 The Vite build uses relative asset paths so the generated `dist/` directory can be hosted at a GitHub Pages project subpath or on another static host.
 
-## Important YAML scale caveat
+## Scale and YAML
 
-The PDF rendering DPI and the ROS YAML `resolution` describe different things:
+The detected printed scale and requested YAML `resolution` jointly determine the
+PDF render DPI:
 
-- **150 DPI** controls how many output pixels are created from the physical PDF page.
-- YAML **`resolution`** is the real-world number of metres represented by one output pixel.
+```text
+DPI = scale denominator × 0.0254 / metres per pixel
+```
 
-The application does not infer the schematic's printed scale or verify that it was printed at its intended physical size. A resolution entered in the YAML is metadata only; it does not resize or calibrate the drawing. Before using the result for ROS navigation, determine the resolution from a trustworthy known distance in the schematic and validate it against the generated image.
+At the default `0.05 m/pixel`, `1:250` renders at `127 DPI` and `1:400`
+renders at `203.2 DPI`. Changing the resolution reruns PDF processing so the PGM
+pixels and YAML metadata remain consistent. Before robot use, still validate a
+trustworthy known distance and the final map in ROS 2/Nav2.
+
+## Hallway-only occupancy
+
+The preview and PGM use the same exact values:
+
+- `0`: occupied wall or closed-door barrier
+- `80`: visually gray but occupied room, courtyard, or page background
+- `255`: free main-hallway space
+
+These values are compatible with the emitted `mode: trinary`,
+`occupied_thresh: 0.65`, and `free_thresh: 0.25` settings. Both black `0` and
+gray `80` load as occupied; only white `255` loads as free. The gray tone keeps
+excluded rooms visually distinct from physical walls without relying on a
+separate unknown-space planner setting. Validate the resulting map in the target
+ROS 2/Nav2 setup before robot use.
 
 ## Cross-platform checks
 
