@@ -30,6 +30,11 @@ export interface SfuLayerClassificationOptions {
   readonly profileRecognized?: boolean
 }
 
+export interface SfuSheetGeometry {
+  readonly rotation: number
+  readonly view: readonly number[]
+}
+
 interface SfuLayerRule {
   readonly role: Exclude<SfuLayerRole, 'sheet-border' | 'unknown'>
   readonly action: SfuLayerAction
@@ -48,6 +53,22 @@ const SUFFIX_RULES = Object.freeze({
   AFLST: { role: 'stair', action: 'review' },
 } satisfies Readonly<Record<string, SfuLayerRule>>)
 
+const SFU_TEMPLATE_LAYER_SUFFIXES = ['ASHTT', 'RM$TXT'] as const
+const SFU_PLAN_GEOMETRY_SUFFIXES = new Set([
+  'ADO',
+  'AFL',
+  'AFLST',
+  'AFLWD',
+  'AGL',
+  'AWA',
+  'AWACO',
+  'AWAFU',
+  'AWAMO',
+  'AWAPR',
+  'LWA',
+  'SIWA',
+])
+
 export const SFU_LAYER_PROFILE_V1 = Object.freeze({
   version: SFU_LAYER_PROFILE_VERSION,
   suffixRules: SUFFIX_RULES,
@@ -58,6 +79,34 @@ export function normalizeLayerSuffix(layerName: string): string {
   const normalized = layerName.normalize('NFKC')
   const separatorIndex = normalized.lastIndexOf('|')
   return normalized.slice(separatorIndex + 1).trim().toUpperCase()
+}
+
+/**
+ * Recognizes the common SFU key-plan template without requiring optional
+ * drafting layers. Some valid sheets omit a north arrow, grid dimensions, or
+ * the usual AWA wall suffix, while retaining the same title/text anchors and
+ * other physical-plan geometry.
+ */
+export function isRecognizedSfuSheet(
+  sheet: SfuSheetGeometry,
+  layerNames: readonly string[],
+): boolean {
+  const [x1 = 0, y1 = 0, x2 = 0, y2 = 0] = sheet.view
+  const rawWidth = Math.abs(x2 - x1)
+  const rawHeight = Math.abs(y2 - y1)
+  const hasSfuSheetGeometry =
+    sheet.rotation === 270 &&
+    Math.abs(rawWidth - 1260) <= 2 &&
+    Math.abs(rawHeight - 2088) <= 2
+  if (!hasSfuSheetGeometry) return false
+
+  const normalizedNames = layerNames.map((name) => name.normalize('NFKC').trim())
+  if (!normalizedNames.includes('0')) return false
+  const suffixes = new Set(normalizedNames.map(normalizeLayerSuffix))
+  return (
+    SFU_TEMPLATE_LAYER_SUFFIXES.every((suffix) => suffixes.has(suffix)) &&
+    [...suffixes].some((suffix) => SFU_PLAN_GEOMETRY_SUFFIXES.has(suffix))
+  )
 }
 
 function retain(

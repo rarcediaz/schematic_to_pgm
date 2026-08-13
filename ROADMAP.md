@@ -1,6 +1,6 @@
 # ROS Map Generator roadmap
 
-Last updated: 2026-08-10
+Last updated: 2026-08-12
 
 This document tracks the path from the current calibrated SFU cleanup pipeline
 to a navigation-ready ROS map generator. The work remains deliberately
@@ -32,7 +32,8 @@ small synthetic PDFs, and approved derived test regions.
 
 - [x] Opens one single-page PDF in the browser.
 - [x] Validates file type, size, page count, password protection, and render size.
-- [x] Detects `1:250` and `1:400` title-block scales from vector PDF text.
+- [x] Detects all ten scales observed in the 172-sheet corpus, from `1:50`
+      through `1:400`, from vector PDF text.
 - [x] Derives render DPI from detected scale and requested ROS resolution.
 - [x] Inventories and normalizes AutoCAD optional-content layers.
 - [x] Removes verified grid, room-text, title, border, and north-indicator layers.
@@ -42,7 +43,8 @@ small synthetic PDFs, and approved derived test regions.
       closed barriers. If no `ADO` pair is confident, that layer is retained
       and warned.
 - [x] Preserves unknown and stair layers for later processing.
-- [x] Shows the exact trinary hallway occupancy preview used for export.
+- [x] Shows the hallway occupancy result with a preview-only light-gray source
+      underlay for blocked rooms; export retains the exact trinary mask.
 - [x] Exports an exact binary P5 PGM and companion ROS YAML.
 - [x] Runs without a backend and keeps the source PDF on the user's computer.
 - [x] Has unit tests, a production build, and Windows/Ubuntu CI configuration.
@@ -251,9 +253,9 @@ Status: **in progress**
       keeping only a fixed-width annulus.
 - [x] Report whether the AQ building envelope was supplied and accepted, and
       expose the envelope-bounded selection mode in the processing diagnostics.
-- [x] Use an explicit three-value preview and PGM palette compatible with YAML
-      thresholds. Dark gray 80 remains visually distinct from black walls while
-      loading as occupied with the current `occupied_thresh: 0.65`.
+- [x] Use navigation-safe PGM reference tones compatible with YAML thresholds.
+      Exterior/detail shades `0..32` and light-gray room fill `80` all load as
+      occupied with `occupied_thresh: 0.65`; only white `255` is free.
 - [ ] Add synchronized source, cleaned, and occupancy views with zoom/pan,
       before/after comparison, mask toggles, warnings, and physical dimensions.
 - [x] Withhold automatic free-space classification when no supported pattern
@@ -262,7 +264,8 @@ Status: **in progress**
 
 Acceptance gate:
 
-- The exported PGM contains only the selected wall/excluded/free values.
+- Every exported non-hallway PGM value is at most `80`, while free hallway is
+  exactly `255`.
 - Annotated walls, rooms, and exterior regions have the expected class.
 - Changing resolution invalidates prior output and reprocesses the sheet.
 

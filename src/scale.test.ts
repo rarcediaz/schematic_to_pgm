@@ -20,6 +20,17 @@ describe('scale detection', () => {
     })
   })
 
+  it.each([50, 75, 100, 125, 150, 175, 200, 250, 300, 400] as const)(
+    'accepts the verified SFU corpus scale 1:%i',
+    (denominator) => {
+      expect(detectScale([`SCALE 1:${denominator}`])).toEqual({
+        status: 'detected',
+        denominator,
+        candidates: [denominator],
+      })
+    },
+  )
+
   it('deduplicates repeated occurrences of the same scale', () => {
     expect(detectScale(['1:250', 'PRINTED SCALE 1 : 250'])).toMatchObject({
       status: 'detected',

@@ -7,6 +7,8 @@ background become gray and non-traversable.
 
 The staged SFU cleanup and calibration work is tracked in
 [ROADMAP.md](ROADMAP.md).
+The 172 local sample sheets, including do-not-convert and split-required cases,
+are classified in [PDF_AUDIT.md](PDF_AUDIT.md).
 
 ## Current SFU pipeline
 
@@ -15,8 +17,9 @@ When a supported SFU key-plan PDF is selected, the application:
 - Input: one single-page SFU schematic PDF
 - Output: a trinary hallway-occupancy PGM file and matching YAML metadata
 - Processing: entirely in the browser; the PDF is not uploaded to a server
-- Scale: detects supported `1:250` and `1:400` title-block scales and derives
-  render DPI from the requested ROS resolution
+- Scale: detects every title-block scale observed in the 172-sheet corpus
+  (`1:50`, `1:75`, `1:100`, `1:125`, `1:150`, `1:175`, `1:200`, `1:250`,
+  `1:300`, and `1:400`) and derives render DPI from the requested ROS resolution
 - Cleanup: removes verified grid, room-text, title, sheet-border, and north-arrow
   PDF layers while preserving unknown and stair layers
 - Doors: replaces confidently matched arc-and-leaf pairs on the SFU `ADO` and
@@ -25,14 +28,20 @@ When a supported SFU key-plan PDF is selected, the application:
 - Crop: derives building bounds from structural AutoCAD layers and adds a
   one-metre margin before the calibrated final render
 - Occupancy: ranks enclosed circulation regions by the number of closed doors
-  along their boundary; on AQ-style plans, the verified `GROS` building envelope
-  fences off the exterior so the full connected circulation around the courtyard
-  can remain free instead of being reduced to a fixed-width ring
+  along their boundary, adapts the door threshold for smaller plans, rejects
+  broad room-like cores, and never selects a component that reaches the crop
+  edge; on AQ-style plans, the verified `GROS` building envelope fences off the
+  exterior so the full connected circulation around the courtyard can remain
+  free instead of being reduced to a fixed-width ring
 - Trace cleanup: absorbs pale drafting overlays up to `0.15 m` wide only when
   verified free hallway exists on opposite sides; walls and excluded rooms are
   never expanded
-- Palette: writes only black `0` (wall/barrier), dark gray `80` (excluded and
-  occupied), and white `255` (free) pixels to both the preview and PGM
+- Preview/export: keeps blocked room interiors light gray, retains their darker
+  linework, shows exterior/page reference detail in dark gray, and leaves only
+  selected hallway space white
+- Export palette: writes black `0` for selected hallway barriers, source detail
+  compressed into `0..32` outside the indoor room mask, light gray `80` for
+  blocked room interiors, and white `255` for free hallway pixels
 
 Files that do not match the verified SFU page geometry and core layer profile
 are retained only as full-sheet diagnostic previews; map export remains disabled.
@@ -124,16 +133,18 @@ trustworthy known distance and the final map in ROS 2/Nav2.
 
 ## Hallway-only occupancy
 
-The preview and PGM use the same exact values:
+The exported PGM uses these navigation-safe ranges:
 
 - `0`: occupied wall or closed-door barrier
-- `80`: visually gray but occupied room, courtyard, or page background
+- `0..32`: dark, occupied exterior/page reference detail
+- `80`: light-gray but occupied indoor room reference
 - `255`: free main-hallway space
 
-These values are compatible with the emitted `mode: trinary`,
+The browser preview uses a brighter version of the same room-versus-exterior
+separation. The PGM values are compatible with the emitted `mode: trinary`,
 `occupied_thresh: 0.65`, and `free_thresh: 0.25` settings. Both black `0` and
-gray `80` load as occupied; only white `255` loads as free. The gray tone keeps
-excluded rooms visually distinct from physical walls without relying on a
+all reference bytes through gray `80` load as occupied; only white `255` loads
+as free. The gray tones keep excluded rooms distinct from the exterior without relying on a
 separate unknown-space planner setting. Validate the resulting map in the target
 ROS 2/Nav2 setup before robot use.
 

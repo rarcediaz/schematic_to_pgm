@@ -1,4 +1,7 @@
-import { OCCUPANCY_PALETTE } from './constants'
+import {
+  OCCUPANCY_PALETTE,
+  OCCUPANCY_REFERENCE_PALETTE,
+} from './constants'
 
 export { OCCUPANCY_PALETTE } from './constants'
 
@@ -44,6 +47,14 @@ export interface OccupancyClassificationOptions {
   readonly maxBoundingBoxFillRatio?: number
   /** Minimum candidate bounding-box span in metres. */
   readonly minLongSideMetres?: number
+  /** Elongation that independently qualifies a standard corridor candidate. */
+  readonly minComponentAspectRatio?: number
+  /** Inward distance beyond which open pixels belong to a broad-space core. */
+  readonly broadCoreDepthMetres?: number
+  /** Minimum broad-core area considered substantial enough to reject. */
+  readonly broadCoreMinAreaMetresSquared?: number
+  /** Minimum component fraction in the broad core considered substantial. */
+  readonly broadCoreMinFraction?: number
   /** Largest enclosed white component fraction required for courtyard mode. */
   readonly courtyardMinImageFraction?: number
   /** Compactness required of the enclosed courtyard candidate. */
@@ -102,6 +113,7 @@ export interface OccupancyDiagnostics {
   readonly sealedObstaclePixelCount: number
   readonly occupiedPixelCount: number
   readonly excludedPixelCount: number
+  readonly roomReferencePixelCount: number
   readonly freePixelCount: number
   readonly removedTracePixelCount: number
 }
@@ -111,6 +123,10 @@ export interface OccupancyClassification {
   readonly height: number
   /** One exact trinary grayscale byte per source pixel. */
   readonly pixels: Uint8Array
+  /** Indoor, enclosed open pixels retained as blocked room reference. */
+  readonly roomMask: Uint8Array
+  /** Navigation-safe, map-looking bytes for PGM export. */
+  readonly mapPixels: Uint8Array
   readonly diagnostics: OccupancyDiagnostics
 }
 
@@ -126,6 +142,10 @@ interface ResolvedOptions {
   readonly minComponentAreaMetresSquared: number
   readonly maxBoundingBoxFillRatio: number
   readonly minLongSideMetres: number
+  readonly minComponentAspectRatio: number
+  readonly broadCoreDepthMetres: number
+  readonly broadCoreMinAreaMetresSquared: number
+  readonly broadCoreMinFraction: number
   readonly courtyardMinImageFraction: number
   readonly courtyardMinBoundingBoxFillRatio: number
   readonly courtyardMaxDoorIncidence: number
@@ -165,7 +185,15 @@ const DEFAULT_MIN_DOOR_INCIDENCE = 10
 const DEFAULT_RELATIVE_DOOR_INCIDENCE = 0.2
 const DEFAULT_MIN_COMPONENT_AREA_METRES_SQUARED = 2.5
 const DEFAULT_MAX_BOUNDING_BOX_FILL_RATIO = 0.6
-const DEFAULT_MIN_LONG_SIDE_METRES = 0
+const DEFAULT_MIN_LONG_SIDE_METRES = 3
+const DEFAULT_MIN_COMPONENT_ASPECT_RATIO = 3
+const DEFAULT_BROAD_CORE_DEPTH_METRES = 3
+const DEFAULT_BROAD_CORE_MIN_AREA_METRES_SQUARED = 4
+const DEFAULT_BROAD_CORE_MIN_FRACTION = 0.1
+const DEFAULT_ADAPTIVE_DOOR_INCIDENCE_FLOOR = 2
+const DEFAULT_ADAPTIVE_DOOR_INCIDENCE_RATIO = 0.5
+const DEFAULT_NO_ENVELOPE_COURTYARD_MIN_SEPARATING_DOORS = 10
+const DEFAULT_COURTYARD_COMPONENT_DOOR_RATIO = 0.4
 const DEFAULT_COURTYARD_MIN_IMAGE_FRACTION = 0.25
 const DEFAULT_COURTYARD_MIN_BOUNDING_BOX_FILL_RATIO = 0.85
 const DEFAULT_COURTYARD_MAX_DOOR_INCIDENCE = 1
@@ -240,6 +268,15 @@ function resolveOptions(
     options.maxBoundingBoxFillRatio ?? DEFAULT_MAX_BOUNDING_BOX_FILL_RATIO
   const minLongSideMetres =
     options.minLongSideMetres ?? DEFAULT_MIN_LONG_SIDE_METRES
+  const minComponentAspectRatio =
+    options.minComponentAspectRatio ?? DEFAULT_MIN_COMPONENT_ASPECT_RATIO
+  const broadCoreDepthMetres =
+    options.broadCoreDepthMetres ?? DEFAULT_BROAD_CORE_DEPTH_METRES
+  const broadCoreMinAreaMetresSquared =
+    options.broadCoreMinAreaMetresSquared ??
+    DEFAULT_BROAD_CORE_MIN_AREA_METRES_SQUARED
+  const broadCoreMinFraction =
+    options.broadCoreMinFraction ?? DEFAULT_BROAD_CORE_MIN_FRACTION
   const courtyardMinImageFraction =
     options.courtyardMinImageFraction ??
     DEFAULT_COURTYARD_MIN_IMAGE_FRACTION
@@ -297,6 +334,19 @@ function resolveOptions(
     throw new RangeError('maxBoundingBoxFillRatio must not exceed 1.')
   }
   assertFiniteNonNegative(minLongSideMetres, 'minLongSideMetres')
+  assertFinitePositive(minComponentAspectRatio, 'minComponentAspectRatio')
+  if (minComponentAspectRatio < 1) {
+    throw new RangeError('minComponentAspectRatio must be at least 1.')
+  }
+  assertFinitePositive(broadCoreDepthMetres, 'broadCoreDepthMetres')
+  assertFiniteNonNegative(
+    broadCoreMinAreaMetresSquared,
+    'broadCoreMinAreaMetresSquared',
+  )
+  assertFinitePositive(broadCoreMinFraction, 'broadCoreMinFraction')
+  if (broadCoreMinFraction > 1) {
+    throw new RangeError('broadCoreMinFraction must not exceed 1.')
+  }
   assertFinitePositive(courtyardMinImageFraction, 'courtyardMinImageFraction')
   if (courtyardMinImageFraction > 1) {
     throw new RangeError('courtyardMinImageFraction must not exceed 1.')
@@ -396,6 +446,10 @@ function resolveOptions(
     minComponentAreaMetresSquared,
     maxBoundingBoxFillRatio,
     minLongSideMetres,
+    minComponentAspectRatio,
+    broadCoreDepthMetres,
+    broadCoreMinAreaMetresSquared,
+    broadCoreMinFraction,
     courtyardMinImageFraction,
     courtyardMinBoundingBoxFillRatio,
     courtyardMaxDoorIncidence,
@@ -678,6 +732,128 @@ function componentAspectRatio(component: Component): number {
   const width = component.right - component.left
   const height = component.bottom - component.top
   return Math.max(width, height) / Math.max(1, Math.min(width, height))
+}
+
+/**
+ * Rejects room-like candidates that contain a substantial open core farther
+ * than the configured physical distance from any component boundary.
+ *
+ * The padded, two-pass distance transform uses eight-neighbour (chessboard)
+ * distance. That deliberately underestimates Euclidean distance, so only
+ * clearly broad open regions are rejected. The component is temporarily given
+ * a private state value while its compact bounding-box mask is assembled, then
+ * restored before classification continues.
+ */
+function componentHasSubstantialBroadCore(
+  state: Uint8Array,
+  width: number,
+  height: number,
+  component: Component,
+  options: ResolvedOptions,
+): boolean {
+  const componentWidth = component.right - component.left
+  const componentHeight = component.bottom - component.top
+  const paddedWidth = componentWidth + 2
+  const paddedHeight = componentHeight + 2
+  const maximumPossibleDepthPixels = Math.ceil(
+    Math.min(componentWidth, componentHeight) / 2,
+  )
+  if (
+    maximumPossibleDepthPixels * options.resolution <=
+    options.broadCoreDepthMetres
+  ) {
+    return false
+  }
+
+  const distances = new Uint16Array(paddedWidth * paddedHeight)
+  const unvisitedDistance = Math.min(
+    65_534,
+    Math.max(paddedWidth, paddedHeight) + 1,
+  )
+  const temporaryState = 6
+  const markedPixels = floodScanline(
+    state,
+    width,
+    height,
+    component.seed,
+    2,
+    temporaryState,
+    (_index, x, y) => {
+      const localX = x - component.left + 1
+      const localY = y - component.top + 1
+      distances[localY * paddedWidth + localX] = unvisitedDistance
+    },
+  )
+
+  try {
+    if (markedPixels !== component.pixels) {
+      return true
+    }
+
+    for (let y = 1; y <= componentHeight; y += 1) {
+      const row = y * paddedWidth
+      for (let x = 1; x <= componentWidth; x += 1) {
+        const index = row + x
+        if (distances[index] === 0) continue
+        distances[index] =
+          Math.min(
+            distances[index - 1] ?? 0,
+            distances[index - paddedWidth - 1] ?? 0,
+            distances[index - paddedWidth] ?? 0,
+            distances[index - paddedWidth + 1] ?? 0,
+          ) + 1
+      }
+    }
+
+    for (let y = componentHeight; y >= 1; y -= 1) {
+      const row = y * paddedWidth
+      for (let x = componentWidth; x >= 1; x -= 1) {
+        const index = row + x
+        if (distances[index] === 0) continue
+        distances[index] = Math.min(
+          distances[index] ?? 0,
+          Math.min(
+              distances[index + 1] ?? 0,
+              distances[index + paddedWidth - 1] ?? 0,
+              distances[index + paddedWidth] ?? 0,
+              distances[index + paddedWidth + 1] ?? 0,
+            ) + 1,
+        )
+      }
+    }
+
+    const minimumBroadCorePixels = Math.max(
+      Math.ceil(
+        options.broadCoreMinAreaMetresSquared /
+          (options.resolution * options.resolution),
+      ),
+      Math.ceil(component.pixels * options.broadCoreMinFraction),
+    )
+    let broadCorePixels = 0
+    for (let y = 1; y <= componentHeight; y += 1) {
+      const row = y * paddedWidth
+      for (let x = 1; x <= componentWidth; x += 1) {
+        const distancePixels = distances[row + x] ?? 0
+        if (
+          distancePixels * options.resolution >
+          options.broadCoreDepthMetres
+        ) {
+          broadCorePixels += 1
+          if (broadCorePixels >= minimumBroadCorePixels) return true
+        }
+      }
+    }
+    return false
+  } finally {
+    floodScanline(
+      state,
+      width,
+      height,
+      component.seed,
+      temporaryState,
+      2,
+    )
+  }
 }
 
 interface BuildingEnvelopeAnalysis {
@@ -1106,13 +1282,38 @@ function absorbSoftTraces(
   return removed
 }
 
+function composeMapPixels(
+  image: RgbaPixelBuffer,
+  occupancyPixels: Uint8Array,
+  roomMask: Uint8Array,
+): Uint8Array {
+  const mapPixels = new Uint8Array(occupancyPixels.length)
+  for (let index = 0; index < occupancyPixels.length; index += 1) {
+    const occupancyValue = occupancyPixels[index]
+    if (
+      occupancyValue === OCCUPANCY_PALETTE.free ||
+      occupancyValue === OCCUPANCY_PALETTE.occupied
+    ) {
+      mapPixels[index] = occupancyValue
+    } else if (roomMask[index] !== 0) {
+      mapPixels[index] = OCCUPANCY_REFERENCE_PALETTE.room
+    } else {
+      const luminance = visibleLuminance(image.data, index * 4)
+      mapPixels[index] = Math.round(
+        (luminance / 255) * OCCUPANCY_REFERENCE_PALETTE.exterior,
+      )
+    }
+  }
+  return mapPixels
+}
+
 /**
  * Produces a conservative hallway-only trinary occupancy raster.
  *
- * White components are ranked by the number of distinct closed doors separating
- * them from other components. If the dominant candidate touches the crop edge,
- * classification fails closed instead of risking an exterior region becoming
- * navigable free space.
+ * Enclosed white components are ranked by the number of distinct closed doors
+ * separating them from other components. Edge-connected space is never
+ * selected, but it cannot veto a separately enclosed corridor that passes the
+ * physical size, shape, door-incidence, and broad-core gates.
  */
 export function classifyMainHallways(
   image: RgbaPixelBuffer,
@@ -1229,13 +1430,18 @@ export function classifyMainHallways(
   const courtyardDominance = courtyard
     ? courtyard.pixels / Math.max(1, courtyardRunnerUp?.pixels ?? 0)
     : 0
+  const hasCourtyardTopologyEvidence =
+    buildingEnvelopeSource !== undefined ||
+    separatingDoorCount >=
+      DEFAULT_NO_ENVELOPE_COURTYARD_MIN_SEPARATING_DOORS
   const courtyardDetected = Boolean(
     courtyard &&
       courtyardImageFraction >= options.courtyardMinImageFraction &&
       courtyardBoundingBoxFillRatio >=
         options.courtyardMinBoundingBoxFillRatio &&
       courtyard.doorIds.size <= options.courtyardMaxDoorIncidence &&
-      courtyardDominance >= options.courtyardDominanceRatio,
+      courtyardDominance >= options.courtyardDominanceRatio &&
+      hasCourtyardTopologyEvidence,
   )
 
   const geometricallyEligible = components
@@ -1251,10 +1457,13 @@ export function classifyMainHallways(
         (component.right - component.left) *
         (component.bottom - component.top)
       const boundingBoxFillRatio = component.pixels / boundingBoxPixels
+      const hasCorridorShape =
+        boundingBoxFillRatio <= options.maxBoundingBoxFillRatio ||
+        componentAspectRatio(component) >= options.minComponentAspectRatio
       return (
         areaMetresSquared >= options.minComponentAreaMetresSquared &&
         longSideMetres >= options.minLongSideMetres &&
-        boundingBoxFillRatio <= options.maxBoundingBoxFillRatio
+        hasCorridorShape
       )
     })
     .sort(compareCandidates)
@@ -1263,9 +1472,22 @@ export function classifyMainHallways(
     0,
     ...components.map((component) => component.doorIds.size),
   )
+  const maximumEnclosedDoorIncidence = Math.max(
+    0,
+    ...components
+      .filter((component) => !component.touchesEdge)
+      .map((component) => component.doorIds.size),
+  )
+  const adaptiveDoorIncidence = Math.max(
+    DEFAULT_ADAPTIVE_DOOR_INCIDENCE_FLOOR,
+    Math.ceil(
+      maximumEnclosedDoorIncidence *
+        DEFAULT_ADAPTIVE_DOOR_INCIDENCE_RATIO,
+    ),
+  )
   const incidenceCutoff = Math.max(
-    options.minDoorIncidence,
-    Math.ceil(maximumDoorIncidence * options.relativeDoorIncidence),
+    Math.min(options.minDoorIncidence, adaptiveDoorIncidence),
+    Math.ceil(maximumEnclosedDoorIncidence * options.relativeDoorIncidence),
   )
   const dominantHighDoorComponent = components
     .filter(
@@ -1276,13 +1498,26 @@ export function classifyMainHallways(
     )
     .sort(compareCandidates)[0] ?? null
   const candidates = geometricallyEligible.filter(
-    (component) => component.doorIds.size >= incidenceCutoff,
+    (component) =>
+      !component.touchesEdge &&
+      component.doorIds.size >= incidenceCutoff &&
+      !componentHasSubstantialBroadCore(
+        state,
+        width,
+        height,
+        component,
+        options,
+      ),
   )
-  const unsafeDominant = dominantHighDoorComponent?.touchesEdge === true
+  const unsafeDominant = Boolean(
+    candidates.length === 0 && dominantHighDoorComponent?.touchesEdge,
+  )
   const geometricallyEligibleIds = new Set(
     geometricallyEligible.map((component) => component.id),
   )
   let selectedComponentCount = 0
+  const selectedComponentIds = new Set<number>()
+  let usedDoorConnectedCourtyardComponents = false
   let candidateComponentCount = candidates.length
   let courtyardAnnulusPixelCount = 0
   let envelopeExpandedPixelCount = 0
@@ -1314,88 +1549,120 @@ export function classifyMainHallways(
         options,
       )
     }
-    candidateComponentCount = 0
+    // On double-loaded courtyard floors, classroom banks can sit between the
+    // courtyard and the actual hallway. If the envelope cannot prove the
+    // footprint, strong closed-door-supported corridor components outrank a
+    // purely proximity-based inner annulus. Small plans retain annulus mode.
+    const strongDoorIncidenceCutoff = Math.max(
+      incidenceCutoff,
+      Math.ceil(
+        maximumEnclosedDoorIncidence *
+          DEFAULT_COURTYARD_COMPONENT_DOOR_RATIO,
+      ),
+    )
+    const strongDoorConnectedCandidates = candidates.filter(
+      (component) =>
+        component.doorIds.size >= strongDoorIncidenceCutoff,
+    )
+    usedDoorConnectedCourtyardComponents =
+      !envelopeAnalysis.accepted &&
+      strongDoorIncidenceCutoff >= options.minDoorIncidence &&
+      strongDoorConnectedCandidates.length > 0
 
-    for (const component of components) {
-      if (component.id === courtyard.id || state[component.seed] !== 2) continue
-      const proximityStats = inspectComponentProximity(
-        state,
-        proximity,
-        width,
-        height,
-        component,
-        envelopeAnalysis.footprint ?? undefined,
-      )
-      const componentArea =
-        component.pixels * options.resolution * options.resolution
-      const componentHasCorridorShape =
-        componentAspectRatio(component) >= options.annulusMinAspectRatio ||
-        componentFillRatio(component) <=
-          options.annulusMaxBoundingBoxFillRatio
-      const selectWholeAnnulusComponent =
-        !component.touchesEdge &&
-        componentArea >= options.annulusMinAreaMetresSquared &&
-        proximityStats.pixels / component.pixels >=
-          options.annulusMinProximityFraction &&
-        componentHasCorridorShape
-      const selectWholeEnvelopeComponent =
-        envelopeAnalysis.accepted &&
-        !component.touchesEdge &&
-        geometricallyEligibleIds.has(component.id) &&
-        component.doorIds.size >= options.minDoorIncidence &&
-        proximityStats.footprintPixels / component.pixels >= 0.95
-      const selectWholeComponent =
-        selectWholeAnnulusComponent || selectWholeEnvelopeComponent
-      const proximityArea =
-        proximityStats.pixels * options.resolution * options.resolution
-      const selectBoundedEdgeSubset =
-        component.touchesEdge &&
-        proximityArea >= options.annulusMinAreaMetresSquared &&
-        proximityStatsHaveCorridorShape(proximityStats, options)
-
-      if (selectWholeComponent) {
-        candidateComponentCount += 1
-        selectedComponentCount += 1
-        if (selectWholeAnnulusComponent) {
-          courtyardAnnulusPixelCount += floodScanline(
-            state,
-            width,
-            height,
-            component.seed,
-            5,
-            3,
-          )
-        } else {
-          floodScanline(state, width, height, component.seed, 5, 2, (index) => {
-            if (
-              envelopeAnalysis.footprint === null ||
-              envelopeAnalysis.footprint[index] === 0
-            ) {
-              return
-            }
-            state[index] = 3
-            envelopeExpandedPixelCount += 1
-          })
+    if (usedDoorConnectedCourtyardComponents) {
+      candidateComponentCount = strongDoorConnectedCandidates.length
+      selectedComponentCount = strongDoorConnectedCandidates.length
+      for (const component of strongDoorConnectedCandidates) {
+        selectedComponentIds.add(component.id)
+        floodScanline(state, width, height, component.seed, 2, 3)
+      }
+    } else {
+      candidateComponentCount = 0
+      for (const component of components) {
+        if (component.id === courtyard.id || state[component.seed] !== 2) {
+          continue
         }
-      } else if (selectBoundedEdgeSubset) {
-        candidateComponentCount += 1
-        selectedComponentCount += 1
-        floodScanline(state, width, height, component.seed, 5, 2, (index) => {
-          const insideAnnulus = proximity[index] !== 0
-          const insideEnvelope =
-            envelopeAnalysis.accepted &&
-            envelopeAnalysis.footprint !== null &&
-            envelopeAnalysis.footprint[index] !== 0
-          if (!insideAnnulus && !insideEnvelope) return
-          state[index] = 3
-          if (insideAnnulus) {
-            courtyardAnnulusPixelCount += 1
+        const proximityStats = inspectComponentProximity(
+          state,
+          proximity,
+          width,
+          height,
+          component,
+          envelopeAnalysis.footprint ?? undefined,
+        )
+        const componentArea =
+          component.pixels * options.resolution * options.resolution
+        const componentHasCorridorShape =
+          componentAspectRatio(component) >= options.annulusMinAspectRatio ||
+          componentFillRatio(component) <=
+            options.annulusMaxBoundingBoxFillRatio
+        const selectWholeAnnulusComponent =
+          !component.touchesEdge &&
+          componentArea >= options.annulusMinAreaMetresSquared &&
+          proximityStats.pixels / component.pixels >=
+            options.annulusMinProximityFraction &&
+          componentHasCorridorShape
+        const selectWholeEnvelopeComponent =
+          envelopeAnalysis.accepted &&
+          !component.touchesEdge &&
+          geometricallyEligibleIds.has(component.id) &&
+          component.doorIds.size >= options.minDoorIncidence &&
+          proximityStats.footprintPixels / component.pixels >= 0.95
+        const selectWholeComponent =
+          selectWholeAnnulusComponent || selectWholeEnvelopeComponent
+        const proximityArea =
+          proximityStats.pixels * options.resolution * options.resolution
+        const selectBoundedEdgeSubset =
+          component.touchesEdge &&
+          proximityArea >= options.annulusMinAreaMetresSquared &&
+          proximityStatsHaveCorridorShape(proximityStats, options)
+
+        if (selectWholeComponent) {
+          candidateComponentCount += 1
+          selectedComponentCount += 1
+          selectedComponentIds.add(component.id)
+          if (selectWholeAnnulusComponent) {
+            courtyardAnnulusPixelCount += floodScanline(
+              state,
+              width,
+              height,
+              component.seed,
+              5,
+              3,
+            )
           } else {
-            envelopeExpandedPixelCount += 1
+            floodScanline(state, width, height, component.seed, 5, 2, (index) => {
+              if (
+                envelopeAnalysis.footprint === null ||
+                envelopeAnalysis.footprint[index] === 0
+              ) {
+                return
+              }
+              state[index] = 3
+              envelopeExpandedPixelCount += 1
+            })
           }
-        })
-      } else {
-        floodScanline(state, width, height, component.seed, 5, 2)
+        } else if (selectBoundedEdgeSubset) {
+          candidateComponentCount += 1
+          selectedComponentCount += 1
+          selectedComponentIds.add(component.id)
+          floodScanline(state, width, height, component.seed, 5, 2, (index) => {
+            const insideAnnulus = proximity[index] !== 0
+            const insideEnvelope =
+              envelopeAnalysis.accepted &&
+              envelopeAnalysis.footprint !== null &&
+              envelopeAnalysis.footprint[index] !== 0
+            if (!insideAnnulus && !insideEnvelope) return
+            state[index] = 3
+            if (insideAnnulus) {
+              courtyardAnnulusPixelCount += 1
+            } else {
+              envelopeExpandedPixelCount += 1
+            }
+          })
+        } else {
+          floodScanline(state, width, height, component.seed, 5, 2)
+        }
       }
     }
   } else if (!unsafeDominant) {
@@ -1404,6 +1671,7 @@ export function classifyMainHallways(
     )
     selectedComponentCount = selectedComponents.length
     for (const component of selectedComponents) {
+      selectedComponentIds.add(component.id)
       floodScanline(state, width, height, component.seed, 2, 3)
     }
   }
@@ -1427,6 +1695,52 @@ export function classifyMainHallways(
         state[index] = 2
       }
     }
+  }
+
+  // Edge-connected white space is page/exterior scope. Sufficiently large
+  // enclosed, unselected components are retained separately as blocked room
+  // interiors so exported review maps can show them lighter than the exterior.
+  const roomMask = new Uint8Array(pixelCount)
+  const minimumRoomReferencePixels = Math.max(
+    1,
+    Math.ceil(
+      options.minComponentAreaMetresSquared /
+        (options.resolution * options.resolution),
+    ),
+  )
+  let roomReferencePixelCount = 0
+  const temporaryRoomState = 6
+  for (const component of components) {
+    if (
+      selectedComponentCount === 0 ||
+      component.touchesEdge ||
+      selectedComponentIds.has(component.id) ||
+      component.pixels < minimumRoomReferencePixels ||
+      state[component.seed] !== 2 ||
+      (courtyardDetected && component.id === courtyard?.id)
+    ) {
+      continue
+    }
+    floodScanline(
+      state,
+      width,
+      height,
+      component.seed,
+      2,
+      temporaryRoomState,
+      (index) => {
+        roomMask[index] = 1
+        roomReferencePixelCount += 1
+      },
+    )
+    floodScanline(
+      state,
+      width,
+      height,
+      component.seed,
+      temporaryRoomState,
+      2,
+    )
   }
 
   const pixels = new Uint8Array(pixelCount)
@@ -1462,7 +1776,7 @@ export function classifyMainHallways(
   const selectionMode: OccupancySelectionMode =
     freePixelCount === 0
       ? 'none'
-      : courtyardDetected
+      : courtyardDetected && !usedDoorConnectedCourtyardComponents
         ? envelopeApplied
           ? 'courtyard-envelope'
           : 'courtyard-annulus'
@@ -1477,11 +1791,14 @@ export function classifyMainHallways(
       : candidates.length === 0
         ? 'No open component passed the hallway area, shape, and closed-door incidence gates.'
         : 'No hallway component passed the conservative selection gate.'
+  const mapPixels = composeMapPixels(image, pixels, roomMask)
 
   return {
     width,
     height,
     pixels,
+    roomMask,
+    mapPixels,
     diagnostics: {
       applied,
       selectionMode,
@@ -1510,6 +1827,7 @@ export function classifyMainHallways(
       sealedObstaclePixelCount,
       occupiedPixelCount,
       excludedPixelCount: pixelCount - freePixelCount - occupiedPixelCount,
+      roomReferencePixelCount,
       freePixelCount,
       removedTracePixelCount,
     },

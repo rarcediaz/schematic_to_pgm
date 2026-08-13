@@ -240,19 +240,19 @@
               <canvas
                 id="preview-canvas"
                 role="img"
-                aria-label="Trinary hallway occupancy preview of the uploaded PDF schematic"
+                aria-label="Hallway occupancy preview of the uploaded PDF schematic"
                 hidden
               ></canvas>
             </div>
             <ul id="occupancy-legend" class="occupancy-legend" aria-label="Occupancy map legend">
               <li><span class="occupancy-swatch occupancy-swatch--free"></span>White: free hallway</li>
               <li><span class="occupancy-swatch occupancy-swatch--occupied"></span>Black: occupied barrier</li>
-              <li><span class="occupancy-swatch occupancy-swatch--excluded"></span>Gray: blocked room or background</li>
+              <li><span class="occupancy-swatch occupancy-swatch--excluded"></span>Light gray: blocked room</li>
+              <li><span class="occupancy-swatch occupancy-swatch--exterior"></span>Dark gray: blocked exterior/reference</li>
             </ul>
             <figcaption id="preview-caption">
-              The preview and PGM use the same trinary pixels. Recognized curved
-              door swings are closed with black barriers; review any warning
-              before export.
+              The preview and PGM keep blocked rooms light gray and exterior
+              reference detail dark gray; only white hallway space is free.
             </figcaption>
           </figure>
 

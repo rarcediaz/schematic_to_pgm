@@ -5,6 +5,7 @@ import {
   grayscaleByte,
   imageDataToPgmBytes,
   occupancyDataToPgmBytes,
+  occupancyMapDataToPgmBytes,
 } from './pgm'
 
 describe('PGM conversion', () => {
@@ -52,5 +53,27 @@ describe('PGM conversion', () => {
         data: new Uint8Array([205]),
       }),
     ).toThrow(/not a wall, excluded space, or free space/i)
+  })
+
+  it('encodes navigation-safe room and exterior reference shades', () => {
+    const bytes = occupancyMapDataToPgmBytes({
+      width: 5,
+      height: 1,
+      data: new Uint8Array([0, 16, 32, 80, 255]),
+    })
+    const header = new TextEncoder().encode('P5\n5 1\n255\n')
+    expect([...bytes.slice(header.length)]).toEqual([0, 16, 32, 80, 255])
+  })
+
+  it('rejects unknown and accidentally free reference shades', () => {
+    for (const value of [81, 90, 191, 192, 254]) {
+      expect(() =>
+        occupancyMapDataToPgmBytes({
+          width: 1,
+          height: 1,
+          data: new Uint8Array([value]),
+        }),
+      ).toThrow(/navigation-safe reference or free-space/i)
+    }
   })
 })

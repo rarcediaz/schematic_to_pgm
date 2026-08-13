@@ -72,8 +72,27 @@ function paintRectangle(
   paintVertical(target, right, top, bottom)
 }
 
+function fillRectangle(
+  target: RgbaPixelBuffer,
+  left: number,
+  top: number,
+  right: number,
+  bottom: number,
+  rgba: readonly [number, number, number, number] = WHITE,
+): void {
+  for (let y = top; y <= bottom; y += 1) {
+    for (let x = left; x <= right; x += 1) {
+      paintPixel(target, x, y, rgba)
+    }
+  }
+}
+
 function horizontalDoor(x: number, y: number): PixelDoorSegment {
   return { ax: x - 1, ay: y, bx: x + 1, by: y }
+}
+
+function verticalDoor(x: number, y: number): PixelDoorSegment {
+  return { ax: x, ay: y - 1, bx: x, by: y + 1 }
 }
 
 function pixelAt(
@@ -82,6 +101,22 @@ function pixelAt(
   y: number,
 ): number {
   return result.pixels[y * result.width + x] ?? -1
+}
+
+function roomAt(
+  result: ReturnType<typeof classifyMainHallways>,
+  x: number,
+  y: number,
+): number {
+  return result.roomMask[y * result.width + x] ?? -1
+}
+
+function mapPixelAt(
+  result: ReturnType<typeof classifyMainHallways>,
+  x: number,
+  y: number,
+): number {
+  return result.mapPixels[y * result.width + x] ?? -1
 }
 
 function testOptions(
@@ -130,6 +165,12 @@ describe('main-hallway trinary classification', () => {
     expect(pixelAt(result, 0, 0)).toBe(OCCUPANCY_PALETTE.excluded)
     expect(pixelAt(result, 20, 15)).toBe(OCCUPANCY_PALETTE.occupied)
     expect(pixelAt(result, 9, 9)).toBe(OCCUPANCY_PALETTE.excluded)
+    expect(roomAt(result, 11, 10)).toBe(1)
+    expect(roomAt(result, 0, 0)).toBe(0)
+    expect(mapPixelAt(result, 11, 10)).toBe(80)
+    expect(mapPixelAt(result, 0, 0)).toBe(32)
+    expect(mapPixelAt(result, 20, 18)).toBe(255)
+    expect(mapPixelAt(result, 20, 15)).toBe(0)
     expect(new Set(result.pixels)).toEqual(
       new Set([
         OCCUPANCY_PALETTE.occupied,
@@ -242,6 +283,65 @@ describe('main-hallway trinary classification', () => {
     expect(result.diagnostics.selectedComponentCount).toBe(2)
   })
 
+  it('does not let a high-incidence exterior veto a safe enclosed hallway', () => {
+    const { source, doors } = basicHallwayPlan()
+    const exteriorDoors = [9, 19, 29, 39, 43].map((x) =>
+      horizontalDoor(x, 4),
+    )
+
+    const result = classifyMainHallways(
+      source,
+      testOptions([...doors, ...exteriorDoors]),
+    )
+
+    expect(result.diagnostics.dominantComponentTouchedEdge).toBe(true)
+    expect(result.diagnostics.selectionMode).toBe('components')
+    expect(pixelAt(result, 20, 18)).toBe(OCCUPANCY_PALETTE.free)
+    expect(pixelAt(result, 0, 0)).toBe(OCCUPANCY_PALETTE.excluded)
+  })
+
+  it('adapts the door threshold for a valid small hallway', () => {
+    const { source, doors } = basicHallwayPlan()
+    const result = classifyMainHallways(
+      source,
+      testOptions(doors, { minDoorIncidence: 10 }),
+    )
+
+    expect(result.diagnostics.maximumDoorIncidence).toBe(4)
+    expect(result.diagnostics.selectionMode).toBe('components')
+    expect(pixelAt(result, 20, 18)).toBe(OCCUPANCY_PALETTE.free)
+  })
+
+  it('accepts a long rectangular corridor but rejects a broad open core', () => {
+    const corridor = image(64, 30, BLACK)
+    fillRectangle(corridor, 5, 10, 51, 13)
+    fillRectangle(corridor, 52, 9, 57, 14)
+    const corridorResult = classifyMainHallways(corridor, {
+      resolution: 1,
+      doorSegments: [{ ax: 51, ay: 10, bx: 51, by: 13 }],
+      sealRadiusMetres: 0,
+      minDoorIncidence: 1,
+      minComponentAreaMetresSquared: 1,
+    })
+
+    expect(pixelAt(corridorResult, 20, 11)).toBe(OCCUPANCY_PALETTE.free)
+
+    const broad = image(100, 70, BLACK)
+    fillRectangle(broad, 5, 10, 44, 49)
+    fillRectangle(broad, 45, 28, 86, 31)
+    fillRectangle(broad, 87, 27, 93, 32)
+    const broadResult = classifyMainHallways(broad, {
+      resolution: 1,
+      doorSegments: [{ ax: 86, ay: 28, bx: 86, by: 31 }],
+      sealRadiusMetres: 0,
+      minDoorIncidence: 1,
+      minComponentAreaMetresSquared: 1,
+    })
+
+    expect(broadResult.diagnostics.selectionMode).toBe('none')
+    expect(pixelAt(broadResult, 20, 20)).toBe(OCCUPANCY_PALETTE.excluded)
+  })
+
   it('fails closed when the dominant hallway candidate reaches the crop edge', () => {
     const source = image(80, 45)
     paintHorizontal(source, 5, 8, 72)
@@ -268,6 +368,8 @@ describe('main-hallway trinary classification', () => {
       new Set([OCCUPANCY_PALETTE.excluded]),
     )
     expect(result.diagnostics.reason).toMatch(/crop edge/)
+    expect(new Set(result.roomMask)).toEqual(new Set([0]))
+    expect(Math.max(...result.mapPixels)).toBeLessThanOrEqual(32)
   })
 
   it('does not emit black obstacles or free space without a hallway candidate', () => {
@@ -286,9 +388,11 @@ describe('main-hallway trinary classification', () => {
       freePixelCount: 0,
     })
     expect(result.diagnostics.reason).toMatch(/area, shape, and closed-door/)
+    expect(new Set(result.roomMask)).toEqual(new Set([0]))
+    expect(Math.max(...result.mapPixels)).toBeLessThanOrEqual(32)
   })
 
-  it('selects only a three-metre courtyard annulus and keeps the courtyard excluded', () => {
+  it('does not infer a courtyard from one large room without topology evidence', () => {
     const source = image(40, 40)
     paintRectangle(source, 8, 8, 31, 31)
     // A separate enclosed, elongated corridor also sits inside the annulus.
@@ -300,15 +404,15 @@ describe('main-hallway trinary classification', () => {
       sealRadiusMetres: 0,
     })
 
-    expect(result.diagnostics.courtyardDetected).toBe(true)
-    expect(result.diagnostics.selectionMode).toBe('courtyard-annulus')
+    expect(result.diagnostics.courtyardDetected).toBe(false)
+    expect(result.diagnostics.selectionMode).toBe('none')
     expect(result.diagnostics.courtyardImageFraction).toBeGreaterThan(0.25)
     expect(result.diagnostics.courtyardBoundingBoxFillRatio).toBe(1)
-    expect(result.diagnostics.courtyardAnnulusPixelCount).toBeGreaterThan(0)
+    expect(result.diagnostics.courtyardAnnulusPixelCount).toBe(0)
     expect(pixelAt(result, 20, 20)).toBe(OCCUPANCY_PALETTE.excluded)
-    expect(pixelAt(result, 7, 20)).toBe(OCCUPANCY_PALETTE.free)
-    expect(pixelAt(result, 33, 20)).toBe(OCCUPANCY_PALETTE.free)
-    expect(pixelAt(result, 8, 20)).toBe(OCCUPANCY_PALETTE.occupied)
+    expect(pixelAt(result, 7, 20)).toBe(OCCUPANCY_PALETTE.excluded)
+    expect(pixelAt(result, 33, 20)).toBe(OCCUPANCY_PALETTE.excluded)
+    expect(pixelAt(result, 8, 20)).toBe(OCCUPANCY_PALETTE.excluded)
     expect(pixelAt(result, 0, 0)).toBe(OCCUPANCY_PALETTE.excluded)
   })
 
@@ -349,6 +453,61 @@ describe('main-hallway trinary classification', () => {
         }
       }
     }
+  })
+
+  it('prefers a classroom corridor ring over the inner edge of a courtyard', () => {
+    const source = image(120, 120)
+    for (const inset of [2, 8, 14, 20]) {
+      paintRectangle(source, inset, inset, 119 - inset, 119 - inset)
+    }
+
+    for (const coordinate of [30, 50, 70, 90]) {
+      paintVertical(source, coordinate, 2, 8)
+      paintVertical(source, coordinate, 111, 117)
+      paintHorizontal(source, coordinate, 2, 8)
+      paintHorizontal(source, coordinate, 111, 117)
+    }
+    for (const coordinate of [30, 50, 70, 90]) {
+      paintVertical(source, coordinate, 14, 20)
+      paintVertical(source, coordinate, 99, 105)
+      paintHorizontal(source, coordinate, 14, 20)
+      paintHorizontal(source, coordinate, 99, 105)
+    }
+
+    const doors: PixelDoorSegment[] = [30, 50, 70, 90].flatMap(
+      (coordinate) => [
+        horizontalDoor(coordinate, 8),
+        horizontalDoor(coordinate, 14),
+        horizontalDoor(coordinate, 105),
+        horizontalDoor(coordinate, 111),
+        verticalDoor(8, coordinate),
+        verticalDoor(14, coordinate),
+        verticalDoor(105, coordinate),
+        verticalDoor(111, coordinate),
+      ],
+    )
+
+    const result = classifyMainHallways(source, {
+      resolution: 0.1,
+      doorSegments: doors,
+      sealRadiusMetres: 0,
+      minDoorIncidence: 1,
+      minComponentAreaMetresSquared: 1,
+      minLongSideMetres: 3,
+      courtyardMinImageFraction: 0.2,
+      courtyardMinBoundingBoxFillRatio: 0.6,
+      courtyardDominanceRatio: 1,
+      courtyardMaxDoorIncidence: 100,
+      buildingEnvelopeSource: image(120, 120),
+    })
+
+    expect(result.diagnostics.courtyardDetected).toBe(true)
+    expect(result.diagnostics.selectionMode).toBe('components')
+    expect(result.diagnostics.courtyardAnnulusPixelCount).toBe(0)
+    expect(pixelAt(result, 11, 60)).toBe(OCCUPANCY_PALETTE.free)
+    expect(pixelAt(result, 60, 11)).toBe(OCCUPANCY_PALETTE.free)
+    expect(pixelAt(result, 17, 60)).toBe(OCCUPANCY_PALETTE.excluded)
+    expect(pixelAt(result, 60, 60)).toBe(OCCUPANCY_PALETTE.excluded)
   })
 
   it('falls back to the safe annulus when the supplied envelope is incomplete', () => {

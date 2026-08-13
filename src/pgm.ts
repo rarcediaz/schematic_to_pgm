@@ -123,6 +123,46 @@ export function occupancyDataToPgmBlob(
   return new Blob([bytes.buffer as ArrayBuffer], { type: PGM_MIME_TYPE })
 }
 
+/**
+ * Encodes a map-looking occupancy raster. White is the only free value; every
+ * retained room, wall, and exterior reference shade remains at or below the
+ * navigation-safe excluded value.
+ */
+export function occupancyMapDataToPgmBytes(
+  image: TrinaryOccupancyData,
+): Uint8Array {
+  const { width, height, data } = image
+  assertImageDimensions(width, height)
+  const pixelCount = width * height
+  if (data.length !== pixelCount) {
+    throw new Error('Occupancy data length does not match the image dimensions.')
+  }
+
+  const header = new TextEncoder().encode(createPgmHeader(width, height))
+  const result = new Uint8Array(header.length + pixelCount)
+  result.set(header)
+  for (let pixel = 0; pixel < pixelCount; pixel += 1) {
+    const value = data[pixel]
+    if (
+      value !== OCCUPANCY_PALETTE.free &&
+      (value === undefined || value > OCCUPANCY_PALETTE.excluded)
+    ) {
+      throw new Error(
+        `Occupancy pixel ${pixel.toLocaleString()} is not a navigation-safe reference or free-space value.`,
+      )
+    }
+    result[header.length + pixel] = value
+  }
+  return result
+}
+
+export function occupancyMapDataToPgmBlob(
+  image: TrinaryOccupancyData,
+): Blob {
+  const bytes = occupancyMapDataToPgmBytes(image)
+  return new Blob([bytes.buffer as ArrayBuffer], { type: PGM_MIME_TYPE })
+}
+
 /** Reads the retained PDF preview canvas and returns a downloadable PGM Blob. */
 export function canvasToPgmBlob(canvas: HTMLCanvasElement): Blob {
   assertImageDimensions(canvas.width, canvas.height)

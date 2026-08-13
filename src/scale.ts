@@ -1,5 +1,16 @@
-/** Printed drawing scales supported by the initial SFU processing profile. */
-export const SUPPORTED_SCALE_DENOMINATORS = [250, 400] as const
+/** Printed drawing scales present in the verified SFU key-plan corpus. */
+export const SUPPORTED_SCALE_DENOMINATORS = [
+  50,
+  75,
+  100,
+  125,
+  150,
+  175,
+  200,
+  250,
+  300,
+  400,
+] as const
 
 export type SupportedScaleDenominator =
   (typeof SUPPORTED_SCALE_DENOMINATORS)[number]

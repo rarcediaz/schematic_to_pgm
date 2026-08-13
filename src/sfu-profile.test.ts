@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   SFU_LAYER_PROFILE_V1,
   classifySfuLayer,
+  isRecognizedSfuSheet,
   normalizeLayerSuffix,
 } from './sfu-profile'
 
@@ -11,6 +12,31 @@ describe('SFU layer-name normalization', () => {
     expect(normalizeLayerSuffix('038|LEVEL 9000| awa ')).toBe('AWA')
     expect(normalizeLayerSuffix('PREFIX|SUBGROUP|rm＄txt')).toBe('RM$TXT')
     expect(normalizeLayerSuffix('  BBY-SFU-NORTH  ')).toBe('BBY-SFU-NORTH')
+  })
+})
+
+describe('SFU sheet recognition', () => {
+  const sheet = { rotation: 270, view: [0, 0, 1260, 2088] }
+
+  it.each([
+    ['standard wall plan', ['0', 'ASHTT', 'PLAN Data|RM$TXT', 'PLAN|AWA']],
+    ['alternate wall plan', ['0', 'ASHTT', 'PLAN Data|RM$TXT', 'PLAN|LWA']],
+    ['sparse glazing plan', ['0', 'ASHTT', 'PLAN Data|RM$TXT', 'PLAN|AGL']],
+  ])('recognizes a %s without optional grid or north layers', (_label, layers) => {
+    expect(isRecognizedSfuSheet(sheet, layers)).toBe(true)
+  })
+
+  it('rejects lookalikes without template anchors or physical plan geometry', () => {
+    expect(isRecognizedSfuSheet(sheet, ['0', 'ASHTT', 'PLAN|AWA'])).toBe(false)
+    expect(
+      isRecognizedSfuSheet(sheet, ['0', 'ASHTT', 'PLAN Data|RM$TXT', 'PLAN|SGR']),
+    ).toBe(false)
+    expect(
+      isRecognizedSfuSheet(
+        { rotation: 0, view: sheet.view },
+        ['0', 'ASHTT', 'PLAN Data|RM$TXT', 'PLAN|AWA'],
+      ),
+    ).toBe(false)
   })
 })
 

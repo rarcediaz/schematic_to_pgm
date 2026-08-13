@@ -2,7 +2,7 @@ import './style.css'
 
 import { MAP_DEFAULTS } from './constants'
 import { renderSinglePagePdf, type RenderedPdfPage } from './pdf'
-import { occupancyDataToPgmBlob } from './pgm'
+import { occupancyMapDataToPgmBlob } from './pgm'
 import {
   ValidationError,
   validateMapSettings,
@@ -132,7 +132,7 @@ function resetPreview(): void {
   dpiBadge.textContent = 'DPI pending'
   occupancyLegend.hidden = false
   previewCaption.textContent =
-    'The preview and PGM use the same trinary pixels. Recognized curved door swings are closed with black barriers; review any warning before export.'
+    'The preview and PGM keep blocked rooms light gray and exterior reference detail dark gray; only white hallway space is free.'
   outputDetailsText.textContent =
     'Dimensions and processing information will appear after the PDF loads.'
 }
@@ -260,7 +260,7 @@ async function runPdfProcess(request: PdfProcessRequest): Promise<void> {
     rendered.canvas.setAttribute(
       'aria-label',
       rendered.profileRecognized
-        ? `Trinary hallway occupancy map preview of ${file.name}: white is free hallway, black is a wall, and gray is blocked room or background space`
+        ? `Hallway occupancy map preview of ${file.name}: white is free hallway, black is a barrier, light gray is a blocked room, and dark gray is blocked exterior or reference detail`
         : `Raw diagnostic preview of unsupported PDF ${file.name}; map export is unavailable`,
     )
     previewCanvas.replaceWith(rendered.canvas)
@@ -271,7 +271,7 @@ async function runPdfProcess(request: PdfProcessRequest): Promise<void> {
     generateButton.disabled = !canExportRenderedMap()
     occupancyLegend.hidden = !rendered.profileRecognized
     previewCaption.textContent = rendered.profileRecognized
-      ? 'The preview and PGM use the same trinary pixels. Recognized curved door swings are closed with black barriers; review any warning before export.'
+      ? 'The preview and PGM keep blocked rooms light gray and exterior reference detail dark gray; only white hallway space is free.'
       : 'Raw diagnostic preview only. This sheet is outside the verified SFU profile, so PGM and YAML export is disabled.'
     dpiBadge.textContent = `${formatDpi(rendered.dpi)} DPI`
     fileDetails.textContent = `${file.name} · ${formatFileSize(file.size)} · 1 page · scale 1:${rendered.scaleDenominator}`
@@ -414,10 +414,10 @@ async function handleGenerate(event: SubmitEvent): Promise<void> {
       return
     }
 
-    const pgmBlob = occupancyDataToPgmBlob({
+    const pgmBlob = occupancyMapDataToPgmBlob({
       width: generationOccupancy.width,
       height: generationOccupancy.height,
-      data: generationOccupancy.pixels,
+      data: generationOccupancy.mapPixels,
     })
     const yamlBlob = createMapYamlBlob(settings)
     installDownloads(settings, pgmBlob, yamlBlob)

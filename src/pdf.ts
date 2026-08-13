@@ -29,14 +29,18 @@ import {
 } from './door-geometry'
 import {
   classifyMainHallways,
-  OCCUPANCY_PALETTE,
   type OccupancyClassification,
   type PixelDoorSegment,
 } from './occupancy'
-import { calculateRenderDpi, detectScale } from './scale'
+import { composeOccupancyPreview } from './occupancy-preview'
+import {
+  calculateRenderDpi,
+  detectScale,
+  SUPPORTED_SCALE_DENOMINATORS,
+} from './scale'
 import {
   classifySfuLayer,
-  normalizeLayerSuffix,
+  isRecognizedSfuSheet,
   type SfuLayerAction,
   type SfuLayerRole,
 } from './sfu-profile'
@@ -120,16 +124,6 @@ const OUTPUT_CANVAS_LIMITS: CanvasLimits = {
   maxDimension: MAX_OUTPUT_DIMENSION,
 }
 
-const SFU_REQUIRED_LAYER_SUFFIXES = [
-  'AWA',
-  'ASHTT',
-  'SGR',
-  'SGRID',
-  'SGRDI',
-  'RM$TXT',
-  'BBY-SFU-NORTH',
-] as const
-
 // These layers describe physical building geometry in the inspected SFU
 // corpus. AFLOV, X-REF1, IDs, dimensions, and unknown groups do not seed the
 // building bounds. A second retained-content pass below still expands those
@@ -160,8 +154,8 @@ const BUILDING_ENVELOPE_LAYER_SUFFIX = 'GROS'
 // floor/wood-detail layers. Those layers carry other useful geometry, so they
 // stay visible and only confidently matched door paths are overpainted.
 const AUXILIARY_DOOR_LAYER_SUFFIXES = new Set(['AGL', 'AFLWD'])
-const MIN_AUXILIARY_DOOR_RADIUS_METRES = 0.45
-const MAX_AUXILIARY_DOOR_RADIUS_METRES = 1.5
+const MIN_DOOR_SPAN_METRES = 0.45
+const MAX_DOOR_SPAN_METRES = 1.5
 
 function normalizeLoadError(error: unknown): PdfRenderError {
   if (error instanceof PdfRenderError) return error
@@ -296,25 +290,6 @@ function layerName(id: string, group: OptionalContentGroupLike): string {
   return name ? name : `Unnamed layer ${id}`
 }
 
-function isRecognizedSfuProfile(
-  page: PDFPageProxy,
-  names: readonly string[],
-): boolean {
-  const suffixes = new Set(names.map(normalizeLayerSuffix))
-  const [x1, y1, x2, y2] = page.view
-  const rawWidth = Math.abs((x2 ?? 0) - (x1 ?? 0))
-  const rawHeight = Math.abs((y2 ?? 0) - (y1 ?? 0))
-  const hasSfuSheetGeometry =
-    Math.abs(rawWidth - 1260) <= 2 && Math.abs(rawHeight - 2088) <= 2
-
-  return (
-    page.rotate === 270 &&
-    hasSfuSheetGeometry &&
-    SFU_REQUIRED_LAYER_SUFFIXES.every((suffix) => suffixes.has(suffix)) &&
-    names.some((name) => name.normalize('NFKC').trim() === '0')
-  )
-}
-
 async function inspectLayers(
   pdf: PDFDocumentProxy,
   page: PDFPageProxy,
@@ -328,8 +303,8 @@ async function inspectLayers(
     name: layerName(id, group),
     initiallyVisible: group.visible !== false,
   }))
-  const profileRecognized = isRecognizedSfuProfile(
-    page,
+  const profileRecognized = isRecognizedSfuSheet(
+    { rotation: page.rotate, view: page.view },
     rawLayers.map((layer) => layer.name),
   )
 
@@ -559,24 +534,29 @@ function countUnmatchedDoorCurves(
   )
 }
 
-function physicalDoorRadiusMetres(
+function physicalDoorSpanMetres(
   closure: DoorClosure,
   scaleDenominator: number,
 ): number {
   return (
-    (closure.radius * scaleDenominator * 0.0254) /
+    (Math.hypot(
+      closure.closedEnd.x - closure.hinge.x,
+      closure.closedEnd.y - closure.hinge.y,
+    ) *
+      scaleDenominator *
+      0.0254) /
     PDF_POINTS_PER_INCH
   )
 }
 
-function isPlausibleAuxiliaryDoor(
+function isPlausibleDoor(
   closure: DoorClosure,
   scaleDenominator: number,
 ): boolean {
-  const radiusMetres = physicalDoorRadiusMetres(closure, scaleDenominator)
+  const spanMetres = physicalDoorSpanMetres(closure, scaleDenominator)
   return (
-    radiusMetres >= MIN_AUXILIARY_DOOR_RADIUS_METRES &&
-    radiusMetres <= MAX_AUXILIARY_DOOR_RADIUS_METRES
+    spanMetres >= MIN_DOOR_SPAN_METRES &&
+    spanMetres <= MAX_DOOR_SPAN_METRES
   )
 }
 
@@ -737,10 +717,16 @@ function pixelDoorSegments(
   viewport: PageViewport,
   crop: PixelBounds | null,
 ): PixelDoorSegment[] {
-  return closures.map((closure) => {
+  return closures.flatMap((closure): PixelDoorSegment[] => {
     const [ax, ay] = toCanvasPoint(viewport, closure.hinge, crop)
     const [bx, by] = toCanvasPoint(viewport, closure.closedEnd, crop)
-    return { ax, ay, bx, by }
+    if (
+      ![ax, ay, bx, by].every(Number.isFinite) ||
+      Math.hypot(bx - ax, by - ay) < 0.5
+    ) {
+      return []
+    }
+    return [{ ax, ay, bx, by }]
   })
 }
 
@@ -756,14 +742,14 @@ function paintOccupancyCanvas(
       'The browser could not draw the hallway occupancy map.',
     )
   }
-  for (let pixel = 0; pixel < occupancy.pixels.length; pixel += 1) {
-    const value = occupancy.pixels[pixel] ?? OCCUPANCY_PALETTE.excluded
-    const offset = pixel * 4
-    source.data[offset] = value
-    source.data[offset + 1] = value
-    source.data[offset + 2] = value
-    source.data[offset + 3] = 255
-  }
+  source.data.set(
+    composeOccupancyPreview(source, {
+      width: occupancy.width,
+      height: occupancy.height,
+      pixels: occupancy.pixels,
+      roomMask: occupancy.roomMask,
+    }),
+  )
   context.putImageData(source, 0, 0)
 }
 
@@ -777,9 +763,12 @@ function requireDetectedScale(textFragments: readonly string[]): number {
     )
   }
   if (detection.status === 'unsupported') {
+    const supported = SUPPORTED_SCALE_DENOMINATORS.map(
+      (denominator) => `1:${denominator}`,
+    ).join(', ')
     throw new PdfRenderError(
       'SCALE_UNSUPPORTED',
-      `This PDF uses unsupported scale 1:${detection.candidates[0]}. Supported SFU scales are 1:250 and 1:400.`,
+      `This PDF uses unsupported scale 1:${detection.candidates[0]}. Supported SFU scales are ${supported}.`,
     )
   }
   throw new PdfRenderError(
@@ -882,21 +871,31 @@ export async function renderSinglePagePdf(
         : null
     const auxiliaryDoorClosures =
       auxiliaryDoorGeometry?.closures.filter((closure) =>
-        isPlausibleAuxiliaryDoor(closure, scaleDenominator),
+        isPlausibleDoor(closure, scaleDenominator),
       ) ?? []
     const auxiliaryDoorSourceMatches =
       auxiliaryDoorGeometry?.sourceMatches.filter((closure) =>
-        isPlausibleAuxiliaryDoor(closure, scaleDenominator),
+        isPlausibleDoor(closure, scaleDenominator),
       ) ?? []
-    const primaryDoorClosures = doorGeometry?.closures ?? []
+    const primaryDoorClosures =
+      doorGeometry?.closures.filter((closure) =>
+        isPlausibleDoor(closure, scaleDenominator),
+      ) ?? []
+    const primaryDoorSourceMatches =
+      doorGeometry?.sourceMatches.filter((closure) =>
+        isPlausibleDoor(closure, scaleDenominator),
+      ) ?? []
     const doorClosures = [...primaryDoorClosures, ...auxiliaryDoorClosures]
     const doorSourceMatches = [
-      ...(doorGeometry?.sourceMatches ?? []),
+      ...primaryDoorSourceMatches,
       ...auxiliaryDoorSourceMatches,
     ]
     const doorCleanupApplied = doorClosures.length > 0
+    const rejectedPrimaryDoorCount =
+      (doorGeometry?.closures.length ?? 0) - primaryDoorClosures.length
     const unmatchedDoorCurveCount = doorGeometry
-      ? countUnmatchedDoorCurves(doorGeometry.diagnostics)
+      ? countUnmatchedDoorCurves(doorGeometry.diagnostics) +
+        rejectedPrimaryDoorCount
       : 0
     const dpi = calculateRenderDpi(scaleDenominator, resolution)
     const fullViewport = page.getViewport({
@@ -915,7 +914,7 @@ export async function renderSinglePagePdf(
     } else if (unmatchedDoorCurveCount > 0) {
       const curveLabel = `ADO curve${unmatchedDoorCurveCount === 1 ? '' : 's'}`
       warnings.push(
-        `${unmatchedDoorCurveCount} ${curveLabel} did not match a hinged door and remained unchanged for review.`,
+        `${unmatchedDoorCurveCount} ${curveLabel} did not match a physically plausible hinged door and remained unchanged for review.`,
       )
     }
 
