@@ -131,9 +131,39 @@
                     Smaller values create a more detailed map and a larger file.
                   </p>
                 </div>
+
+                <div class="field">
+                  <label for="origin-x">Origin X</label>
+                  <div class="input-with-suffix input-with-suffix--compact">
+                    <input
+                      id="origin-x"
+                      name="origin-x"
+                      type="number"
+                      value="0.0"
+                      step="0.1"
+                      inputmode="decimal"
+                      required
+                    />
+                    <span aria-hidden="true">m</span>
+                  </div>
+                </div>
+
+                <div class="field">
+                  <label for="origin-y">Origin Y</label>
+                  <div class="input-with-suffix input-with-suffix--compact">
+                    <input
+                      id="origin-y"
+                      name="origin-y"
+                      type="number"
+                      value="0.0"
+                      step="0.1"
+                      inputmode="decimal"
+                      required
+                    />
+                    <span aria-hidden="true">m</span>
+                  </div>
+                </div>
               </div>
-              <input id="origin-x" name="origin-x" type="hidden" value="0.0" />
-              <input id="origin-y" name="origin-y" type="hidden" value="0.0" />
             </fieldset>
 
             <div class="generate-area">

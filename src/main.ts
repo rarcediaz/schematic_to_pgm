@@ -190,9 +190,11 @@ function focusValidationField(error: ValidationError): void {
 }
 
 function processingSummary(rendered: RenderedPdfPage): string {
-  return rendered.occupancy?.diagnostics.applied
+  const summary = rendered.occupancy?.diagnostics.applied
     ? 'Your processed map is ready. Review the preview, then generate your files.'
     : 'We could not create a reliable map from this PDF. Try another floor plan.'
+  const warning = rendered.warnings.join(' ')
+  return warning ? `${summary} ${warning}` : summary
 }
 
 async function runPdfProcess(request: PdfProcessRequest): Promise<void> {
@@ -230,7 +232,11 @@ async function runPdfProcess(request: PdfProcessRequest): Promise<void> {
     updateOutputDetails()
     setStatus(
       processingSummary(rendered),
-      rendered.occupancy?.diagnostics.applied ? 'success' : 'error',
+      !rendered.occupancy?.diagnostics.applied
+        ? 'error'
+        : rendered.warnings.length === 0
+          ? 'success'
+          : 'neutral',
     )
   } catch (error) {
     if (token !== selectionToken) return
