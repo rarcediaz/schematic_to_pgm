@@ -132,9 +132,9 @@ function resetPreview(): void {
   dpiBadge.textContent = 'DPI pending'
   occupancyLegend.hidden = false
   previewCaption.textContent =
-    'The preview and PGM keep blocked rooms light gray and exterior reference detail dark gray; only white hallway space is free.'
+    'Review your processed map before downloading. White areas are available for navigation; shaded areas are blocked.'
   outputDetailsText.textContent =
-    'Dimensions and processing information will appear after the PDF loads.'
+    'Map dimensions will appear after processing.'
 }
 
 function currentSettings(): ValidatedMapSettings {
@@ -154,31 +154,6 @@ function canExportRenderedMap(): boolean {
   )
 }
 
-function hallwayResultDescription(
-  occupancy: NonNullable<RenderedPdfPage['occupancy']>,
-  detailed: boolean,
-): string {
-  const { diagnostics } = occupancy
-  if (!diagnostics.applied) {
-    return 'hallway classification withheld; export unavailable'
-  }
-  if (diagnostics.selectionMode === 'courtyard-envelope') {
-    return detailed
-      ? 'full courtyard circulation kept white inside the verified building envelope; rooms, courtyard, and background blocked in gray'
-      : 'full envelope-bounded circulation white · rooms/courtyard/background blocked gray'
-  }
-  if (diagnostics.selectionMode === 'courtyard-annulus') {
-    return detailed
-      ? 'courtyard-ring hallway kept white; rooms, courtyard, and background blocked in gray'
-      : 'courtyard-ring hallway white · rooms/courtyard/background blocked gray'
-  }
-
-  const count = diagnostics.selectedComponentCount
-  return detailed
-    ? `${count.toLocaleString()} main hallway region${count === 1 ? '' : 's'} kept white; rooms and background blocked in gray`
-    : `${count.toLocaleString()} main hallway region${count === 1 ? '' : 's'} white · rooms/background blocked gray`
-}
-
 function updateOutputDetails(): void {
   if (
     !pdfReady ||
@@ -191,29 +166,16 @@ function updateOutputDetails(): void {
 
   const resolution = Number(resolutionInput.value)
   const pixelDescription = `${previewCanvas.width.toLocaleString()} × ${previewCanvas.height.toLocaleString()} px`
-  const processingDescription = renderedPdf.crop
-    ? 'automatically cropped'
-    : 'full sheet retained'
-  const doorDescription = renderedPdf.doorCleanupApplied
-    ? ` · ${renderedPdf.closedDoorCount.toLocaleString()} door swing${renderedPdf.closedDoorCount === 1 ? '' : 's'} closed`
-    : ''
-  const doorReviewDescription =
-    renderedPdf.unmatchedDoorCurveCount > 0
-      ? ` · ${renderedPdf.unmatchedDoorCurveCount.toLocaleString()} unmatched ADO mark${renderedPdf.unmatchedDoorCurveCount === 1 ? '' : 's'} retained for review`
-      : ''
-  const occupancyDescription = renderedPdf.occupancy
-    ? ` · ${hallwayResultDescription(renderedPdf.occupancy, false)}`
-    : ' · trinary classification unavailable'
 
   if (!Number.isFinite(resolution) || resolution <= 0) {
-    outputDetailsText.textContent = `${pixelDescription} at ${formatDpi(renderedPdf.dpi)} DPI · scale 1:${renderedPdf.scaleDenominator} · ${processingDescription}${doorDescription}${doorReviewDescription}${occupancyDescription}.`
+    outputDetailsText.textContent = pixelDescription
     return
   }
 
   const widthMetres = previewCanvas.width * resolution
   const heightMetres = previewCanvas.height * resolution
   const metres = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 })
-  outputDetailsText.textContent = `${pixelDescription} at ${formatDpi(renderedPdf.dpi)} DPI · ${metres.format(widthMetres)} × ${metres.format(heightMetres)} m · scale 1:${renderedPdf.scaleDenominator} · ${processingDescription}${doorDescription}${doorReviewDescription}${occupancyDescription}.`
+  outputDetailsText.textContent = `${pixelDescription} · ${metres.format(widthMetres)} × ${metres.format(heightMetres)} m · ${resolution} m/px`
 }
 
 function focusValidationField(error: ValidationError): void {
@@ -228,19 +190,9 @@ function focusValidationField(error: ValidationError): void {
 }
 
 function processingSummary(rendered: RenderedPdfPage): string {
-  const removed = rendered.removedLayerNames.length
-  const removedLabel = `${removed} verified layer${removed === 1 ? '' : 's'} removed`
-  const cropLabel = rendered.crop
-    ? 'cropped to the building bounds'
-    : 'full sheet retained'
-  const doorLabel = rendered.doorCleanupApplied
-    ? `${rendered.closedDoorCount.toLocaleString()} door swing${rendered.closedDoorCount === 1 ? '' : 's'} closed`
-    : 'original door layer retained'
-  const occupancyLabel = rendered.occupancy
-    ? hallwayResultDescription(rendered.occupancy, true)
-    : 'trinary classification unavailable'
-  const warning = rendered.warnings.join(' ')
-  return `Scale 1:${rendered.scaleDenominator} detected · ${removedLabel} · ${doorLabel} · ${occupancyLabel} · ${cropLabel}.${warning ? ` ${warning}` : ''}`
+  return rendered.occupancy?.diagnostics.applied
+    ? 'Your processed map is ready. Review the preview, then generate your files.'
+    : 'We could not create a reliable map from this PDF. Try another floor plan.'
 }
 
 async function runPdfProcess(request: PdfProcessRequest): Promise<void> {
@@ -271,14 +223,14 @@ async function runPdfProcess(request: PdfProcessRequest): Promise<void> {
     generateButton.disabled = !canExportRenderedMap()
     occupancyLegend.hidden = !rendered.profileRecognized
     previewCaption.textContent = rendered.profileRecognized
-      ? 'The preview and PGM keep blocked rooms light gray and exterior reference detail dark gray; only white hallway space is free.'
-      : 'Raw diagnostic preview only. This sheet is outside the verified SFU profile, so PGM and YAML export is disabled.'
+      ? 'Review your processed map before downloading. White areas are available for navigation; shaded areas are blocked.'
+      : 'This floor plan could not be converted. Try another single-page SFU schematic.'
     dpiBadge.textContent = `${formatDpi(rendered.dpi)} DPI`
     fileDetails.textContent = `${file.name} · ${formatFileSize(file.size)} · 1 page · scale 1:${rendered.scaleDenominator}`
     updateOutputDetails()
     setStatus(
       processingSummary(rendered),
-      rendered.warnings.length === 0 ? 'success' : 'neutral',
+      rendered.occupancy?.diagnostics.applied ? 'success' : 'error',
     )
   } catch (error) {
     if (token !== selectionToken) return

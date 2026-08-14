@@ -7,7 +7,7 @@
       name="description"
       content="Convert a single-page SFU schematic into a trinary hallway occupancy PGM and matching ROS YAML map."
     />
-    <title>ROS Map Generator</title>
+    <title>AislePilot Map Converter</title>
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
@@ -15,50 +15,37 @@
 
     <header class="site-header">
       <div class="site-header__content">
-        <a class="brand" href="./" aria-label="ROS Map Generator home">
+        <a class="brand" href="./" aria-label="AislePilot Map Converter home">
           <span class="brand__mark" aria-hidden="true">
             <svg viewBox="0 0 24 24" focusable="false">
-              <path d="M4 5.5h16v13H4z" />
-              <path d="M8 5.5v13M16 5.5v13M4 10h16M4 14h16" />
+              <path d="M3.5 17.5C7 11.5 12 7.5 20.5 4.5" />
+              <path d="m15 4 5.5.5-2.8 4.8" />
+              <path d="M5.5 17.5h8M7.5 14.5h5" />
             </svg>
           </span>
-          <span>ROS Map Generator</span>
+          <span class="brand__wordmark"><span>Aisle</span><strong>Pilot</strong></span>
+          <span class="brand__product">Map Converter</span>
         </a>
-        <span class="version-badge">Simple converter</span>
+        <span class="version-badge"><span class="status-dot" aria-hidden="true"></span>Processed locally</span>
       </div>
     </header>
 
     <main id="main-content" class="page-shell">
       <section class="intro" aria-labelledby="page-title">
-        <p class="eyebrow">PDF to ROS map</p>
-        <h1 id="page-title">Turn a schematic into a hallway map</h1>
+        <p class="eyebrow">PDF to robot map</p>
+        <h1 id="page-title">Convert your floor plan into a <span>robot-ready map.</span></h1>
         <p class="intro__summary">
-          Upload a single-page SFU schematic, review the automatically cleaned
-          hallway occupancy map, and download a PGM image with its matching ROS
-          YAML file.
+          Upload a PDF, review the processed map, and download the files for
+          your robot. Everything happens securely in your browser.
         </p>
       </section>
-
-      <aside class="scope-note" aria-labelledby="scope-title">
-        <span class="scope-note__icon" aria-hidden="true">i</span>
-        <div>
-          <h2 id="scope-title">Automatic schematic cleanup</h2>
-          <p>
-            The app detects the printed scale, removes verified SFU grid, text,
-            title, border, and north-arrow layers, replaces recognized door
-            swings with closed barriers, then finds the main hallway regions.
-            Rooms and page background are blocked in gray; unusual geometry
-            produces a warning instead of being silently marked free.
-          </p>
-        </div>
-      </aside>
 
       <div class="workspace">
         <section class="panel controls-panel" aria-labelledby="converter-title">
           <div class="panel__header">
             <div>
-              <p class="section-kicker">Map settings</p>
-              <h2 id="converter-title">Create your files</h2>
+              <p class="section-kicker">Get started</p>
+              <h2 id="converter-title">Create your map</h2>
             </div>
           </div>
 
@@ -100,7 +87,7 @@
             <fieldset class="form-section form-section--settings">
               <legend>
                 <span class="step-number" aria-hidden="true">2</span>
-                Configure the map
+                Choose your output
               </legend>
 
               <div class="field">
@@ -141,42 +128,12 @@
                     <span aria-hidden="true">m/px</span>
                   </div>
                   <p id="resolution-help" class="field-help">
-                    Map scale in metres per pixel.
+                    Smaller values create a more detailed map and a larger file.
                   </p>
                 </div>
-
-                <div class="field">
-                  <label for="origin-x">Origin X</label>
-                  <div class="input-with-suffix input-with-suffix--compact">
-                    <input
-                      id="origin-x"
-                      name="origin-x"
-                      type="number"
-                      value="0.0"
-                      step="0.1"
-                      inputmode="decimal"
-                      required
-                    />
-                    <span aria-hidden="true">m</span>
-                  </div>
-                </div>
-
-                <div class="field">
-                  <label for="origin-y">Origin Y</label>
-                  <div class="input-with-suffix input-with-suffix--compact">
-                    <input
-                      id="origin-y"
-                      name="origin-y"
-                      type="number"
-                      value="0.0"
-                      step="0.1"
-                      inputmode="decimal"
-                      required
-                    />
-                    <span aria-hidden="true">m</span>
-                  </div>
-                </div>
               </div>
+              <input id="origin-x" name="origin-x" type="hidden" value="0.0" />
+              <input id="origin-y" name="origin-y" type="hidden" value="0.0" />
             </fieldset>
 
             <div class="generate-area">
@@ -220,8 +177,8 @@
         <section class="panel preview-panel" aria-labelledby="preview-title">
           <div class="panel__header panel__header--preview">
             <div>
-              <p class="section-kicker">Processed map</p>
-              <h2 id="preview-title">Map preview</h2>
+              <p class="section-kicker">Before you download</p>
+              <h2 id="preview-title">Processed map preview</h2>
             </div>
             <span id="dpi-badge" class="dpi-badge">DPI pending</span>
           </div>
@@ -251,14 +208,14 @@
               <li><span class="occupancy-swatch occupancy-swatch--exterior"></span>Dark gray: blocked exterior/reference</li>
             </ul>
             <figcaption id="preview-caption">
-              The preview and PGM keep blocked rooms light gray and exterior
-              reference detail dark gray; only white hallway space is free.
+              Review your processed map before downloading. White areas are
+              available for navigation; shaded areas are blocked.
             </figcaption>
           </figure>
 
           <div id="output-details" class="output-details" aria-live="polite">
-            <span>Output details</span>
-            <p>Dimensions and file information will appear after generation.</p>
+            <span>Map size</span>
+            <p>Map dimensions will appear after processing.</p>
           </div>
         </section>
       </div>
